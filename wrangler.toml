@@ -1,0 +1,4 @@
+name = "worker-cloudflare"
+account_id = "34b20cfe4942c861ec708ab9d5f8c6b9"
+main = "public/js/worker.js"
+compatibility_date = "2024-05-07"
