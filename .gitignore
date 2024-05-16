@@ -165,3 +165,8 @@ wrangler.toml
 
 # cloudflare auto generated data and others
 .wrangler/
+
+# images
+*.png
+*.jpg
+*.jpeg

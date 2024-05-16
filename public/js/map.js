@@ -1,27 +1,45 @@
-console.log('JavaScript is working!');
+import { locations } from './config.js';
 
-// Initialize the Leaflet map
+console.log("Map script loaded!");  // Check if this message is logged
+
 const map = L.map('map').setView([51.505, -0.09], 13);
+console.log("Map initialized!");  // Check if this message is logged
 
-// Add a tile layer to the map
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
+  maxZoom: 19,
 }).addTo(map);
+console.log("Tile layer added!");  // Check if this message is logged
 
-// Function to add an image marker
-function addImageMarker(lat, lng, imageName) {
-    // Use the Cloudflare Worker URL to access the image
-    const icon = L.icon({
-        iconUrl: `https://worker-cloudflare.renancatan4.workers.dev/${imageName}`, // Adjust path
-        iconSize: [50, 50] // Customize the size as needed
+Object.keys(locations).forEach(country => {
+  console.log(`Country: ${country}`);  // Debugging
+  Object.keys(locations[country]).forEach(region => {
+    console.log(`Region: ${region}`);  // Debugging
+    Object.keys(locations[country][region]).forEach(province => {
+      console.log(`Province: ${province}`);  // Debugging
+      Object.keys(locations[country][region][province]).forEach(city => {
+        console.log(`City: ${city}`);  // Debugging
+        const location = locations[country][region][province][city];
+        const marker = L.marker(location.coordinates).addTo(map);
+        console.log(`Marker added at: ${location.coordinates}`);  // Debugging
+
+        marker.on('click', function() {
+          const imageContainer = document.createElement('div');
+          location.images.forEach(imageUrl => {
+            const img = document.createElement('img');
+            img.src = imageUrl;
+            img.style.width = '100px';  // Adjust image size
+            img.style.height = '100px'; // Adjust image size
+            imageContainer.appendChild(img);
+          });
+
+          const popup = L.popup()
+            .setLatLng(location.coordinates)
+            .setContent(imageContainer)
+            .openOn(map);
+
+          console.log("Images added to pop-up!");  // Debugging
+        });
+      });
     });
-
-    // Add the marker to the map with the image icon
-    const marker = L.marker([lat, lng], { icon }).addTo(map);
-
-    // Optional: Bind a popup or additional actions
-    marker.bindPopup(`<strong>${imageName}</strong>`);
-}
-
-// Example usage
-addImageMarker(51.505, -0.09, 'renan-coffee.jpg'); // Adjust coordinates and image name
+  });
+});
