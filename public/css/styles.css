@@ -1,0 +1,13 @@
+/* Adjust the size and layout of images inside the popup */
+.leaflet-popup-content img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+  }
+  
+  /* Optional: style the popup container if needed */
+  .leaflet-popup-content-wrapper {
+    text-align: center;
+  }
+  

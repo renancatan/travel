@@ -1,27 +1,45 @@
-console.log('JavaScript is working!');
+import { locations } from './config.js';
 
-// Initialize the Leaflet map
-const map = L.map('map').setView([51.505, -0.09], 13);
+const map = L.map('map').setView([0, 0], 2);
 
-// Add a tile layer to the map
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '&copy; OpenStreetMap contributors'
+  maxZoom: 19,
 }).addTo(map);
 
-// Function to add an image marker
-function addImageMarker(lat, lng, imageName) {
-    // Use the Cloudflare Worker URL to access the image
-    const icon = L.icon({
-        iconUrl: `https://worker-cloudflare.renancatan4.workers.dev/${imageName}`, // Adjust path
-        iconSize: [50, 50] // Customize the size as needed
+const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
+
+Object.keys(locations).forEach(country => {
+  console.log(`Processing country: ${country}`);  
+  Object.keys(locations[country]).forEach(region => {
+    console.log(`Processing region: ${region}`);  
+    Object.keys(locations[country][region]).forEach(province => {
+      console.log(`Processing province: ${province}`);  
+      Object.keys(locations[country][region][province]).forEach(city => {
+        console.log(`Processing city: ${city}`);  
+        const location = locations[country][region][province][city];
+        console.log(`Location details: ${JSON.stringify(location)}`);  
+
+        // Verify if location coordinates are valid
+        if (location.coordinates && location.coordinates.length === 2) {
+          const marker = L.marker(location.coordinates).addTo(map);
+          console.log(`Marker added at: ${location.coordinates}`);  
+
+          location.images.forEach((image, index) => {
+            const fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${image}`;
+            console.log(`Full Path: ${fullPath}`);  
+
+            const icon = L.icon({
+              iconUrl: fullPath,
+              iconSize: [50, 50]
+            });
+
+            const imageMarker = L.marker([location.coordinates[0] + index * 0.00025, location.coordinates[1] + index * 0.00025], { icon }).addTo(map);
+            imageMarker.bindPopup(`<strong>${fullPath}</strong>`);
+          });
+        } else {
+          console.log(`Invalid coordinates for ${city}`);  
+        }
+      });
     });
-
-    // Add the marker to the map with the image icon
-    const marker = L.marker([lat, lng], { icon }).addTo(map);
-
-    // Optional: Bind a popup or additional actions
-    marker.bindPopup(`<strong>${imageName}</strong>`);
-}
-
-// Example usage
-addImageMarker(51.505, -0.09, 'renan-coffee.jpg'); // Adjust coordinates and image name
+  });
+});
