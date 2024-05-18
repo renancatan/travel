@@ -166,6 +166,9 @@ wrangler.toml
 # cloudflare auto generated data and others
 .wrangler/
 
+# ts script will always generate a .js file
+public/js/generateMetadata.js
+
 # images
 *.png
 *.jpg

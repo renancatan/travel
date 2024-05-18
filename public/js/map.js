@@ -1,44 +1,44 @@
 import { locations } from './config.js';
 
-console.log("Map script loaded!");  // Check if this message is logged
-
-const map = L.map('map').setView([51.505, -0.09], 13);
-console.log("Map initialized!");  // Check if this message is logged
+const map = L.map('map').setView([0, 0], 2);
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   maxZoom: 19,
 }).addTo(map);
-console.log("Tile layer added!");  // Check if this message is logged
+
+const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
 
 Object.keys(locations).forEach(country => {
-  console.log(`Country: ${country}`);  // Debugging
+  console.log(`Processing country: ${country}`);  
   Object.keys(locations[country]).forEach(region => {
-    console.log(`Region: ${region}`);  // Debugging
+    console.log(`Processing region: ${region}`);  
     Object.keys(locations[country][region]).forEach(province => {
-      console.log(`Province: ${province}`);  // Debugging
+      console.log(`Processing province: ${province}`);  
       Object.keys(locations[country][region][province]).forEach(city => {
-        console.log(`City: ${city}`);  // Debugging
+        console.log(`Processing city: ${city}`);  
         const location = locations[country][region][province][city];
-        const marker = L.marker(location.coordinates).addTo(map);
-        console.log(`Marker added at: ${location.coordinates}`);  // Debugging
+        console.log(`Location details: ${JSON.stringify(location)}`);  
 
-        marker.on('click', function() {
-          const imageContainer = document.createElement('div');
-          location.images.forEach(imageUrl => {
-            const img = document.createElement('img');
-            img.src = imageUrl;
-            img.style.width = '100px';  // Adjust image size
-            img.style.height = '100px'; // Adjust image size
-            imageContainer.appendChild(img);
+        // Verify if location coordinates are valid
+        if (location.coordinates && location.coordinates.length === 2) {
+          const marker = L.marker(location.coordinates).addTo(map);
+          console.log(`Marker added at: ${location.coordinates}`);  
+
+          location.images.forEach((image, index) => {
+            const fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${image}`;
+            console.log(`Full Path: ${fullPath}`);  
+
+            const icon = L.icon({
+              iconUrl: fullPath,
+              iconSize: [50, 50]
+            });
+
+            const imageMarker = L.marker([location.coordinates[0] + index * 0.00025, location.coordinates[1] + index * 0.00025], { icon }).addTo(map);
+            imageMarker.bindPopup(`<strong>${fullPath}</strong>`);
           });
-
-          const popup = L.popup()
-            .setLatLng(location.coordinates)
-            .setContent(imageContainer)
-            .openOn(map);
-
-          console.log("Images added to pop-up!");  // Debugging
-        });
+        } else {
+          console.log(`Invalid coordinates for ${city}`);  
+        }
       });
     });
   });

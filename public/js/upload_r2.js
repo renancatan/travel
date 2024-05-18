@@ -15,11 +15,10 @@ const s3 = new AWS.S3({
   signatureVersion: 'v4',
 });
 
-// Define the directory structure
-const localImageDir = path.join(__dirname, '../../uploads/br/sp/eldorado/caves');
 const remotePrefix = 'br/sp/eldorado/caves/';
+const localImageDir = path.join(__dirname, `../../uploads/${remotePrefix}`);
+// const localImageDir = path.join(__dirname, '../../uploads/br/sp/eldorado/caves');
 
-// Upload images
 fs.readdir(localImageDir, (err, files) => {
   if (err) {
     console.error('Error reading directory:', err);

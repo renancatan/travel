@@ -1,0 +1,6 @@
+give permission for a folder, e.g if you're permitting inside the folder:
+sudo chown -R $USER:$USER ./
+- The -R option stands for recursively for every content inside that folder, target the user you want to permit and ./ is the path for the folder
+
+To kill a port that stuck opened:
+sudo kill -9 $(sudo lsof -t -i:3000)

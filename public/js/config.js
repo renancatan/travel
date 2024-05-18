@@ -1,37 +1,52 @@
 export const locations = {
-    "ph": {
-      "mindanao": {
-        "davao_del_sur": {
-          "davao": {
-            "coordinates": [7.1907, 125.4553],
-            "images": [
-              "https://worker-cloudflare.renancatan4.workers.dev/renan-coffee.jpg"
-            ]
-          }
-        }
-      },
-      "visayas": {
-        "cebu": {
-          "coordinates": [10.3157, 123.8854],
+  "br": {
+    "sp": {
+      "eldorado": {
+        "coordinates": [
+          -24.5281,
+          -48.1104
+        ],
+        "images": [
+          "eldorado_general_1.png",
+          "eldorado_general_2.png",
+          "eldorado_caves_1.png",
+          "eldorado_caves_2.png"
+        ]
+      }
+    }
+  },
+  "ph": {
+    "mindanao": {
+      "davao_del_sur": {
+        "davao": {
+          "coordinates": [
+            7.1907,
+            125.4553
+          ],
           "images": [
-            "https://worker-cloudflare.renancatan4.workers.dev/test2.png",
-            // "https://worker-cloudflare.renancatan4.workers.dev/cebu-beach2.jpg"
+            "davao_general_1.png",
+            "davao_general_2.jpg",
+            "davao_general_3.jpg",
+            "davao_general_4.png",
+            "davao_general_5.png",
+            "davao_beaches_1.png",
+            "davao_beaches_2.jpg",
+            "davao_bars_1.png",
+            "davao_bars_2.jpg"
           ]
         }
       }
     },
-    "br": {
-        "sp": {
-          "eldorado": {
-            "caves": {
-              "coordinates": [7.1907, 125.4553],
-              "images": [
-                "https://worker-cloudflare.renancatan4.workers.dev/test1.png",
-              //   "https://worker-cloudflare.renancatan4.workers.dev/davao-bar1.jpg"
-              ]
-            }
-          }
+    "visayas": {
+      "cebu": {
+        "cebu": {
+          "coordinates": [
+            10.3157,
+            123.8854
+          ],
+          "images": []
         }
       }
-  };
-  
+    }
+  }
+};
