@@ -8,27 +8,29 @@ function generateConfig(basePath, metadata) {
     Object.keys(metadata.countries).forEach((country) => {
         console.log(`Processing country: ${country}`);
         const countryData = metadata.countries[country];
-        locations[country] = {};
+        locations[country] = { name: country, regions: {}, provinces: {} };
 
         if (countryData.regions && Object.keys(countryData.regions).length > 0) {
             console.log(`Country has regions: ${Object.keys(countryData.regions)}`);
             Object.keys(countryData.regions).forEach((region) => {
                 console.log(`Processing region: ${region}`);
                 const regionData = countryData.regions[region];
-                locations[country][region] = {};
+                locations[country].regions[region] = { name: region, provinces: {} };
 
                 Object.keys(regionData.provinces).forEach((province) => {
                     console.log(`Processing province: ${province}`);
                     const provinceData = regionData.provinces[province];
-                    locations[country][region][province] = {};
+                    locations[country].regions[region].provinces[province] = { name: province, cities: {} };
 
                     if (provinceData.cities && Object.keys(provinceData.cities).length > 0) {
                         Object.keys(provinceData.cities).forEach((city) => {
                             console.log(`Processing city: ${city}`);
                             const cityData = provinceData.cities[city];
-                            locations[country][region][province][city] = {
+                            locations[country].regions[region].provinces[province].cities[city] = {
+                                name: city,
                                 coordinates: cityData.coordinates || [],
-                                images: []
+                                images: [],
+                                categories: cityData.categories || []
                             };
 
                             const cityPath = path.join(basePath, country, region, province, city);
@@ -37,7 +39,7 @@ function generateConfig(basePath, metadata) {
                                 files.forEach((file) => {
                                     const filePath = path.join(cityPath, file);
                                     if (!fs.lstatSync(filePath).isDirectory()) {
-                                        locations[country][region][province][city].images.push(file);
+                                        locations[country].regions[region].provinces[province].cities[city].images.push(file);
                                     }
                                 });
                             }
@@ -51,7 +53,7 @@ function generateConfig(basePath, metadata) {
                                     files.forEach((file) => {
                                         const filePath = path.join(categoryPath, file);
                                         if (!fs.lstatSync(filePath).isDirectory()) {
-                                            locations[country][region][province][city].images.push(file);
+                                            locations[country].regions[region].provinces[province].cities[city].images.push(file);
                                         }
                                     });
                                 } else {
@@ -67,15 +69,17 @@ function generateConfig(basePath, metadata) {
             Object.keys(countryData.provinces).forEach((province) => {
                 console.log(`Processing province: ${province}`);
                 const provinceData = countryData.provinces[province];
-                locations[country][province] = {};
+                locations[country].provinces[province] = { name: province, cities: {} };
 
                 if (provinceData.cities && Object.keys(provinceData.cities).length > 0) {
                     Object.keys(provinceData.cities).forEach((city) => {
                         console.log(`Processing city: ${city}`);
                         const cityData = provinceData.cities[city];
-                        locations[country][province][city] = {
+                        locations[country].provinces[province].cities[city] = {
+                            name: city,
                             coordinates: cityData.coordinates || [],
-                            images: []
+                            images: [],
+                            categories: cityData.categories || []
                         };
 
                         const cityPath = path.join(basePath, country, province, city);
@@ -84,7 +88,7 @@ function generateConfig(basePath, metadata) {
                             files.forEach((file) => {
                                 const filePath = path.join(cityPath, file);
                                 if (!fs.lstatSync(filePath).isDirectory()) {
-                                    locations[country][province][city].images.push(file);
+                                    locations[country].provinces[province].cities[city].images.push(file);
                                 }
                             });
                         }
@@ -98,7 +102,7 @@ function generateConfig(basePath, metadata) {
                                 files.forEach((file) => {
                                     const filePath = path.join(categoryPath, file);
                                     if (!fs.lstatSync(filePath).isDirectory()) {
-                                        locations[country][province][city].images.push(file);
+                                        locations[country].provinces[province].cities[city].images.push(file);
                                     }
                                 });
                             } else {

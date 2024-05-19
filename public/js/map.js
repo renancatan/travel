@@ -8,38 +8,88 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
 
+console.log('Locations data:', JSON.stringify(locations, null, 2));
+
 Object.keys(locations).forEach(country => {
-  console.log(`Processing country: ${country}`);  
-  Object.keys(locations[country]).forEach(region => {
-    console.log(`Processing region: ${region}`);  
-    Object.keys(locations[country][region]).forEach(province => {
-      console.log(`Processing province: ${province}`);  
-      Object.keys(locations[country][region][province]).forEach(city => {
-        console.log(`Processing city: ${city}`);  
-        const location = locations[country][region][province][city];
-        console.log(`Location details: ${JSON.stringify(location)}`);  
+  console.log(`Processing country: ${country}`);
+  const countryData = locations[country];
+  console.log('Country data:', countryData);
 
-        // Verify if location coordinates are valid
-        if (location.coordinates && location.coordinates.length === 2) {
-          const marker = L.marker(location.coordinates).addTo(map);
-          console.log(`Marker added at: ${location.coordinates}`);  
+  if (countryData.regions && Object.keys(countryData.regions).length > 0) {
+    Object.keys(countryData.regions).forEach(region => {
+      const regionData = countryData.regions[region];
+      console.log(`Processing region: ${region}`);
+      console.log('Region data:', regionData);
 
-          location.images.forEach((image, index) => {
-            const fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${image}`;
-            console.log(`Full Path: ${fullPath}`);  
+      Object.keys(regionData.provinces).forEach(province => {
+        const provinceData = regionData.provinces[province];
+        console.log(`Processing province: ${province}`);
+        console.log('Province data:', provinceData);
 
-            const icon = L.icon({
-              iconUrl: fullPath,
-              iconSize: [50, 50]
-            });
-
-            const imageMarker = L.marker([location.coordinates[0] + index * 0.00025, location.coordinates[1] + index * 0.00025], { icon }).addTo(map);
-            imageMarker.bindPopup(`<strong>${fullPath}</strong>`);
-          });
-        } else {
-          console.log(`Invalid coordinates for ${city}`);  
-        }
+        Object.keys(provinceData.cities).forEach(city => {
+          const cityData = provinceData.cities[city];
+          console.log(`Processing city: ${city}`);
+          processLocation(country, region, province, city, cityData);
+        });
       });
     });
-  });
+  } else if (countryData.provinces && Object.keys(countryData.provinces).length > 0) {
+    Object.keys(countryData.provinces).forEach(province => {
+      const provinceData = countryData.provinces[province];
+      console.log(`Processing province: ${province}`);
+      console.log('Province data:', provinceData);
+
+      Object.keys(provinceData.cities).forEach(city => {
+        const cityData = provinceData.cities[city];
+        console.log(`Processing city: ${city}`);
+        processLocation(country, null, province, city, cityData);
+      });
+    });
+  }
 });
+
+function processLocation(country, region, province, locationName, locationData) {
+  console.log(`Location details: ${JSON.stringify(locationData)}`);
+
+  if (locationData.coordinates && locationData.coordinates.length === 2) {
+    const marker = L.marker(locationData.coordinates).addTo(map);
+    console.log(`Marker added at: ${locationData.coordinates}`);
+
+    locationData.images.forEach((image, index) => {
+      const category = getCategoryFromImageName(image, locationData.categories);
+      let fullPath;
+
+      if (region && province) {
+        fullPath = `${workerBaseURL}/${country}/${region}/${province}/${locationName}/${category}/${image}`;
+      } else if (region) {
+        fullPath = `${workerBaseURL}/${country}/${region}/${locationName}/${category}/${image}`;
+      } else {
+        fullPath = `${workerBaseURL}/${country}/${province}/${locationName}/${category}/${image}`;
+      }
+
+      console.log(`Full Path: ${fullPath}`);
+
+      const icon = L.icon({
+        iconUrl: fullPath,
+        iconSize: [50, 50]
+      });
+
+      const imageMarker = L.marker(
+        [locationData.coordinates[0] + index * 0.00025, locationData.coordinates[1] + index * 0.00025],
+        { icon }
+      ).addTo(map);
+      imageMarker.bindPopup(`<strong>${fullPath}</strong>`);
+    });
+  } else {
+    console.log(`Invalid coordinates for ${locationName}`);
+  }
+}
+
+function getCategoryFromImageName(imageName, categories) {
+  for (const category of categories) {
+    if (imageName.includes(category)) {
+      return category;
+    }
+  }
+  return 'general';
+}
