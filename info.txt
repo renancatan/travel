@@ -4,3 +4,24 @@ sudo chown -R $USER:$USER ./
 
 To kill a port that stuck opened:
 sudo kill -9 $(sudo lsof -t -i:3000)
+
+# cloudflare
+More details for the settings at:
+https://www.npmjs.com/package/wrangler
+
+For setting the wrangler to communicate and authenticate with R2 API:
+npm install wrangler --save-dev
+The setting then will have to be in your wrangler.toml file
+
+Next type:
+wrangler login
+
+Next type:
+npm install -g wrangler
+
+Then run this command:
+wrangler secret put R2_API_TOKEN
+insert your r2 token
+
+Finally, after setting the worker.js file, you can deploy it, so run:
+npx wrangler deploy

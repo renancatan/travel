@@ -1,10 +1,10 @@
 const AWS = require('aws-sdk');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config();
+require('dotenv').config({path: '../../.env'});
 
-const r2AccessKey = '';
-const r2SecretKey = '';
+const r2AccessKey = process.env.R2_ACCESS_KEY;
+const r2SecretKey = process.env.R2_SECRET_KEY;
 const bucketName = 'travels';
 
 const s3 = new AWS.S3({
@@ -15,7 +15,7 @@ const s3 = new AWS.S3({
   signatureVersion: 'v4',
 });
 
-const remotePrefix = 'br/sp/eldorado/caves/';
+const remotePrefix = 'ph/mindanao/davao_del_sur/davao/bars/';
 const localImageDir = path.join(__dirname, `../../uploads/${remotePrefix}`);
 // const localImageDir = path.join(__dirname, '../../uploads/br/sp/eldorado/caves');
 

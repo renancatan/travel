@@ -1,4 +1,4 @@
-import { locations } from './config.js';
+import { populateFilters, filterMarkers } from './filters/filters.js';
 
 const map = L.map('map').setView([0, 0], 2);
 
@@ -7,81 +7,73 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
+let allLocations = [];
+let markers = [];
 
-console.log('Locations data:', JSON.stringify(locations, null, 2));
+fetch('/metadata.json')
+  .then(response => {
+    if (!response.ok) {
+      throw new Error('Network response was not ok ' + response.statusText);
+    }
+    return response.json();
+  })
+  .then(locations => {
+    console.log('Locations data:', JSON.stringify(locations, null, 2));
+    allLocations = locations;
+    populateFilters(locations, 'regionFilter', 'categoryFilter');
+    updateMarkers(locations);
+  })
+  .catch(error => {
+    console.error('Failed to fetch metadata:', error);
+  });
 
-Object.keys(locations).forEach(country => {
-  console.log(`Processing country: ${country}`);
-  const countryData = locations[country];
-  console.log('Country data:', countryData);
+function removeMarkers() {
+  markers.forEach(marker => {
+    map.removeLayer(marker);
+  });
+  markers = [];
+}
 
-  if (countryData.regions && Object.keys(countryData.regions).length > 0) {
-    Object.keys(countryData.regions).forEach(region => {
-      const regionData = countryData.regions[region];
-      console.log(`Processing region: ${region}`);
-      console.log('Region data:', regionData);
+function processLocation(location, selectedRegion, selectedCategory) {
+  console.log(`Processing location: ${location.city}, region: ${location.region}, categories: ${location.categories}`);
+  console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}`);
+  
+  if (location.coordinates && location.coordinates.length === 2) {
+    const regionMatches = selectedRegion === 'all' || location.region === selectedRegion;
+    const categoryMatches = selectedCategory === 'all' || location.categories.includes(selectedCategory);
 
-      Object.keys(regionData.provinces).forEach(province => {
-        const provinceData = regionData.provinces[province];
-        console.log(`Processing province: ${province}`);
-        console.log('Province data:', provinceData);
+    if (regionMatches && categoryMatches) {
+      console.log(`Adding marker for location: ${location.city}`);
+      const marker = L.marker(location.coordinates).addTo(map);
+      markers.push(marker);
 
-        Object.keys(provinceData.cities).forEach(city => {
-          const cityData = provinceData.cities[city];
-          console.log(`Processing city: ${city}`);
-          processLocation(country, region, province, city, cityData);
+      location.images.forEach((image, index) => {
+        const category = getCategoryFromImageName(image, location.categories);
+        let fullPath;
+
+        if (location.region) {
+          fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
+        } else {
+          fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
+        }
+
+        const icon = L.icon({
+          iconUrl: fullPath,
+          iconSize: [50, 50]
         });
+
+        const imageMarker = L.marker(
+          [location.coordinates[0] + index * 0.00025, location.coordinates[1] + index * 0.00025],
+          { icon }
+        ).addTo(map);
+        imageMarker.bindPopup(`<strong>${fullPath}</strong>`);
+        markers.push(imageMarker);
       });
-    });
-  } else if (countryData.provinces && Object.keys(countryData.provinces).length > 0) {
-    Object.keys(countryData.provinces).forEach(province => {
-      const provinceData = countryData.provinces[province];
-      console.log(`Processing province: ${province}`);
-      console.log('Province data:', provinceData);
-
-      Object.keys(provinceData.cities).forEach(city => {
-        const cityData = provinceData.cities[city];
-        console.log(`Processing city: ${city}`);
-        processLocation(country, null, province, city, cityData);
-      });
-    });
-  }
-});
-
-function processLocation(country, region, province, locationName, locationData) {
-  console.log(`Location details: ${JSON.stringify(locationData)}`);
-
-  if (locationData.coordinates && locationData.coordinates.length === 2) {
-    const marker = L.marker(locationData.coordinates).addTo(map);
-    console.log(`Marker added at: ${locationData.coordinates}`);
-
-    locationData.images.forEach((image, index) => {
-      const category = getCategoryFromImageName(image, locationData.categories);
-      let fullPath;
-
-      if (region && province) {
-        fullPath = `${workerBaseURL}/${country}/${region}/${province}/${locationName}/${category}/${image}`;
-      } else if (region) {
-        fullPath = `${workerBaseURL}/${country}/${region}/${locationName}/${category}/${image}`;
-      } else {
-        fullPath = `${workerBaseURL}/${country}/${province}/${locationName}/${category}/${image}`;
-      }
-
-      console.log(`Full Path: ${fullPath}`);
-
-      const icon = L.icon({
-        iconUrl: fullPath,
-        iconSize: [50, 50]
-      });
-
-      const imageMarker = L.marker(
-        [locationData.coordinates[0] + index * 0.00025, locationData.coordinates[1] + index * 0.00025],
-        { icon }
-      ).addTo(map);
-      imageMarker.bindPopup(`<strong>${fullPath}</strong>`);
-    });
+    } else {
+      console.log(`Skipping location: ${location.city}`);
+    }
   } else {
-    console.log(`Invalid coordinates for ${locationName}`);
+    console.log(`Invalid coordinates for ${location.city}`);
   }
 }
 
@@ -93,3 +85,22 @@ function getCategoryFromImageName(imageName, categories) {
   }
   return 'general';
 }
+
+function updateMarkers(locations) {
+  console.log('Updating markers...');
+  removeMarkers();
+  const selectedRegion = document.getElementById('regionFilter').value;
+  const selectedCategory = document.getElementById('categoryFilter').value;
+
+  console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}`);
+  
+  locations.forEach(location => processLocation(location, selectedRegion, selectedCategory));
+}
+
+document.getElementById('regionFilter').addEventListener('change', () => {
+  updateMarkers(allLocations);
+});
+
+document.getElementById('categoryFilter').addEventListener('change', () => {
+  updateMarkers(allLocations);
+});
