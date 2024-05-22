@@ -1,4 +1,3 @@
-const fs = require('fs');
 const { google } = require('googleapis');
 require('dotenv').config();
 
@@ -25,28 +24,16 @@ const auth = new google.auth.GoogleAuth({
     scopes: SCOPES,
 });
 
-async function getSheetData() {
+async function getSheetData(spreadsheetId, range) {
     const client = await auth.getClient();
     const sheets = google.sheets({ version: 'v4', auth: client });
-    const spreadsheetId = process.env.SPREADSHEET_ID;
-    const range = `${process.env.SPREADSHEET}!A2:Z`;
 
     const res = await sheets.spreadsheets.values.get({
         spreadsheetId,
         range,
     });
 
-    const rows = res.data.values;
-    if (rows.length) {
-        console.log('Data from Google Sheets:');
-        rows.forEach((row) => {
-            console.log(`${row[0]}, ${row[1]}`);
-        });
-        return rows;
-    } else {
-        console.log('No data found.');
-        return [];
-    }
+    return res.data.values;
 }
 
 module.exports = getSheetData;
