@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const getSheetData = require('./public/js/google/sheets.js');
 
 const app = express();
 const port = 3000;
@@ -9,12 +10,20 @@ app.use((req, res, next) => {
     next();
 });
 
-// Serve static files from the 'public' directory
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Serve metadata.json explicitly
 app.get('/metadata.json', (req, res) => {
     res.sendFile(path.join(__dirname, 'public/js/metadata.json'));
+});
+
+app.get('/data', async (req, res) => {
+    try {
+        const data = await getSheetData();
+        res.json(data);
+    } catch (error) {
+        console.error('Failed to fetch data from Google Sheets:', error);
+        res.status(500).send('Failed to fetch data from Google Sheets');
+    }
 });
 
 app.listen(port, () => {
