@@ -11,6 +11,8 @@ function mergeData(primaryData, secondaryData) {
             primaryItem.country = primaryItem.country || item.country;
             primaryItem.province = primaryItem.province || item.province;
             primaryItem.coordinates = primaryItem.coordinates.length ? primaryItem.coordinates : item.coordinates;
+            primaryItem.prices = primaryItem.prices || item.prices;
+            primaryItem.additionalInfo = primaryItem.additionalInfo || item.additionalInfo;
         } else {
             primaryMap.set(item.city, item);
         }

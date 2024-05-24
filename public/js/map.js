@@ -1,48 +1,31 @@
 import { populateFilters, filterMarkers } from './filters/filters.js';
 
 const map = L.map('map').setView([0, 0], 2);
+const maxZoomIn = 20;
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
+  maxZoom: maxZoomIn,
 }).addTo(map);
 
 const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
 let allLocations = [];
 let markers = [];
 
-fetch('/metadata.json')
+fetch('/data')
   .then(response => {
     if (!response.ok) {
       throw new Error('Network response was not ok ' + response.statusText);
     }
     return response.json();
   })
-  .then(primaryData => {
-    console.log('Primary data:', JSON.stringify(primaryData, null, 2));
-
-    fetch('/data')
-      .then(response => {
-        if (!response.ok) {
-          throw new Error('Network response was not ok ' + response.statusText);
-        }
-        return response.json();
-      })
-      .then(secondaryData => {
-        console.log('Google Sheets data:', JSON.stringify(secondaryData, null, 2));
-        const mergedData = mergeData(primaryData, secondaryData);
-        allLocations = mergedData;
-        populateFilters(mergedData, 'regionFilter', 'categoryFilter');
-        updateMarkers(mergedData);
-      })
-      .catch(error => {
-        console.error('Failed to fetch data:', error);
-        allLocations = primaryData;
-        populateFilters(primaryData, 'regionFilter', 'categoryFilter');
-        updateMarkers(primaryData);
-      });
+  .then(data => {
+    console.log('Merged data:', JSON.stringify(data, null, 2));
+    allLocations = data;
+    populateFilters(data, 'regionFilter', 'categoryFilter');
+    updateMarkers(data);
   })
   .catch(error => {
-    console.error('Failed to fetch metadata:', error);
+    console.error('Failed to fetch data:', error);
   });
 
 function removeMarkers() {
@@ -68,7 +51,7 @@ function processLocation(location, selectedRegion, selectedCategory) {
       const tooltip = L.tooltip({
         permanent: true,
         direction: 'top'
-      }).setContent(location.city);
+      }).setContent(`${location.city}\n - ${location.prices || 'No Price Info'}`);
       marker.bindTooltip(tooltip);
 
       location.images.forEach((image, index) => {
@@ -128,24 +111,3 @@ document.getElementById('regionFilter').addEventListener('change', () => {
 document.getElementById('categoryFilter').addEventListener('change', () => {
   updateMarkers(allLocations);
 });
-
-function mergeData(primaryData, secondaryData) {
-  const primaryMap = new Map();
-  primaryData.forEach(item => primaryMap.set(item.city, item));
-
-  secondaryData.forEach(item => {
-    if (primaryMap.has(item.city)) {
-      const primaryItem = primaryMap.get(item.city);
-      primaryItem.categories = [...new Set([...primaryItem.categories, ...item.categories])];
-      primaryItem.images = [...new Set([...primaryItem.images, ...item.images])];
-      primaryItem.region = primaryItem.region || item.region;
-      primaryItem.country = primaryItem.country || item.country;
-      primaryItem.province = primaryItem.province || item.province;
-      primaryItem.coordinates = primaryItem.coordinates.length ? primaryItem.coordinates : item.coordinates;
-    } else {
-      primaryMap.set(item.city, item);
-    }
-  });
-
-  return Array.from(primaryMap.values());
-}
