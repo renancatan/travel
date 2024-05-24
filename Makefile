@@ -15,5 +15,4 @@ run:
 	node $(JS_UPDATE_CONFIG)
 
 server:
-	@echo $(JS_SERVER) running server..
-	node $(JS_SERVER)
+	clear && node $(JS_SERVER)

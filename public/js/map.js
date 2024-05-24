@@ -1,31 +1,47 @@
 import { populateFilters, filterMarkers } from './filters/filters.js';
 
 const map = L.map('map').setView([0, 0], 2);
-const maxZoomIn = 20;
 
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: maxZoomIn,
+  maxZoom: 19,
 }).addTo(map);
 
 const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
 let allLocations = [];
 let markers = [];
 
-fetch('/data')
+fetch('/metadata.json')
   .then(response => {
     if (!response.ok) {
       throw new Error('Network response was not ok ' + response.statusText);
     }
     return response.json();
   })
-  .then(data => {
-    console.log('Merged data:', JSON.stringify(data, null, 2));
-    allLocations = data;
-    populateFilters(data, 'regionFilter', 'categoryFilter');
-    updateMarkers(data);
+  .then(primaryData => {
+    console.log('Primary data:', JSON.stringify(primaryData, null, 2));
+
+    fetch('/data')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Network response was not ok ' + response.statusText);
+        }
+        return response.json();
+      })
+      .then(mergedData => {
+        console.log('Merged data:', JSON.stringify(mergedData, null, 2));
+        allLocations = mergedData;
+        populateFilters(mergedData, 'regionFilter', 'categoryFilter');
+        updateMarkers(mergedData);
+      })
+      .catch(error => {
+        console.error('Failed to fetch data:', error);
+        allLocations = primaryData;
+        populateFilters(primaryData, 'regionFilter', 'categoryFilter');
+        updateMarkers(primaryData);
+      });
   })
   .catch(error => {
-    console.error('Failed to fetch data:', error);
+    console.error('Failed to fetch metadata:', error);
   });
 
 function removeMarkers() {
@@ -48,40 +64,61 @@ function processLocation(location, selectedRegion, selectedCategory) {
       const marker = L.marker(location.coordinates).addTo(map);
       markers.push(marker);
 
+      marker.on('click', () => {
+        showImageModal(location);
+      });
+
       const tooltip = L.tooltip({
         permanent: true,
         direction: 'top'
-      }).setContent(`${location.city}\n - ${location.prices || 'No Price Info'}`);
+      }).setContent(`${location.city} - Price: ${location.prices}`);
       marker.bindTooltip(tooltip);
-
-      location.images.forEach((image, index) => {
-        const category = getCategoryFromImageName(image, location.categories);
-        let fullPath;
-
-        if (location.region) {
-          fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
-        } else {
-          fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
-        }
-
-        const icon = L.icon({
-          iconUrl: fullPath,
-          iconSize: [50, 50]
-        });
-
-        const imageMarker = L.marker(
-          [location.coordinates[0] + index * 0.00025, location.coordinates[1] + index * 0.00025],
-          { icon }
-        ).addTo(map);
-        imageMarker.bindPopup(`<strong>${fullPath}</strong>`);
-        markers.push(imageMarker);
-      });
     } else {
       console.log(`Skipping location: ${location.city}`);
     }
   } else {
     console.log(`Invalid coordinates for ${location.city}`);
   }
+}
+
+function showImageModal(location) {
+  const modal = document.getElementById('imageModal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalBody = document.getElementById('modalBody');
+  const modalInfo = document.getElementById('modalInfo');
+
+  modalTitle.innerText = location.city;
+  modalInfo.innerHTML = `Price: ${location.prices}<br>${location.additionalInfo}`;
+  modalBody.innerHTML = '';
+
+  location.images.forEach(image => {
+    const imgElement = document.createElement('img');
+    const category = getCategoryFromImageName(image, location.categories);
+    let fullPath;
+
+    if (location.region) {
+      fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
+    } else {
+      fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
+    }
+
+    imgElement.src = fullPath;
+    modalBody.appendChild(imgElement);
+  });
+
+  modal.style.display = 'block';
+
+  // Close the modal
+  const closeBtn = document.getElementsByClassName('close')[0];
+  closeBtn.onclick = function() {
+    modal.style.display = 'none';
+  };
+
+  window.onclick = function(event) {
+    if (event.target == modal) {
+      modal.style.display = 'none';
+    }
+  };
 }
 
 function getCategoryFromImageName(imageName, categories) {
