@@ -10,6 +10,15 @@ const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
 let allLocations = [];
 let markers = [];
 
+// Define icons for categories
+const categoryIcons = {
+  bar: L.icon({ iconUrl: 'path/to/bar-icon.png', iconSize: [30, 30] }),
+  beach: L.icon({ iconUrl: 'path/to/beach-icon.png', iconSize: [30, 30] }),
+  cave: L.icon({ iconUrl: 'path/to/cave-icon.png', iconSize: [30, 30] }),
+  // Add more categories as needed
+  default: L.icon({ iconUrl: 'path/to/default-icon.png', iconSize: [30, 30] })
+};
+
 fetch('/metadata.json')
   .then(response => {
     if (!response.ok) {
@@ -27,8 +36,9 @@ fetch('/metadata.json')
         }
         return response.json();
       })
-      .then(mergedData => {
-        console.log('Merged data:', JSON.stringify(mergedData, null, 2));
+      .then(secondaryData => {
+        console.log('Google Sheets data:', JSON.stringify(secondaryData, null, 2));
+        const mergedData = mergeData(primaryData, secondaryData);
         allLocations = mergedData;
         populateFilters(mergedData, 'regionFilter', 'categoryFilter');
         updateMarkers(mergedData);
@@ -39,6 +49,24 @@ fetch('/metadata.json')
         populateFilters(primaryData, 'regionFilter', 'categoryFilter');
         updateMarkers(primaryData);
       });
+
+    // fetch('/data')
+    // .then(response => {
+    //   if (!response.ok) {
+    //     throw new Error('Network response was not ok ' + response.statusText);
+    //   }
+    //   return response.json();
+    // })
+    // .then(mergedData => {
+    //   console.log('Merged data:', JSON.stringify(mergedData, null, 2));
+    //   allLocations = mergedData;
+    //   populateFilters(mergedData, 'regionFilter', 'categoryFilter');
+    //   updateMarkers(mergedData);
+    // })
+    // .catch(error => {
+    //   console.error('Failed to fetch data:', error);
+    // });
+
   })
   .catch(error => {
     console.error('Failed to fetch metadata:', error);
@@ -61,64 +89,28 @@ function processLocation(location, selectedRegion, selectedCategory) {
 
     if (regionMatches && categoryMatches) {
       console.log(`Adding marker for location: ${location.city}`);
-      const marker = L.marker(location.coordinates).addTo(map);
-      markers.push(marker);
+      
+      // Choose icon based on category
+      const category = location.categories.length > 0 ? location.categories[0] : 'default';
+      const icon = categoryIcons[category] || categoryIcons.default;
 
-      marker.on('click', () => {
-        showImageModal(location);
-      });
+      const marker = L.marker(location.coordinates, { icon }).addTo(map);
+      markers.push(marker);
 
       const tooltip = L.tooltip({
         permanent: true,
         direction: 'top'
-      }).setContent(`${location.city} - Price: ${location.prices}`);
+      }).setContent(location.city);
       marker.bindTooltip(tooltip);
+
+      marker.on('click', () => openModal(location));
+
     } else {
       console.log(`Skipping location: ${location.city}`);
     }
   } else {
     console.log(`Invalid coordinates for ${location.city}`);
   }
-}
-
-function showImageModal(location) {
-  const modal = document.getElementById('imageModal');
-  const modalTitle = document.getElementById('modalTitle');
-  const modalBody = document.getElementById('modalBody');
-  const modalInfo = document.getElementById('modalInfo');
-
-  modalTitle.innerText = location.city;
-  modalInfo.innerHTML = `Price: ${location.prices}<br>${location.additionalInfo}`;
-  modalBody.innerHTML = '';
-
-  location.images.forEach(image => {
-    const imgElement = document.createElement('img');
-    const category = getCategoryFromImageName(image, location.categories);
-    let fullPath;
-
-    if (location.region) {
-      fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
-    } else {
-      fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
-    }
-
-    imgElement.src = fullPath;
-    modalBody.appendChild(imgElement);
-  });
-
-  modal.style.display = 'block';
-
-  // Close the modal
-  const closeBtn = document.getElementsByClassName('close')[0];
-  closeBtn.onclick = function() {
-    modal.style.display = 'none';
-  };
-
-  window.onclick = function(event) {
-    if (event.target == modal) {
-      modal.style.display = 'none';
-    }
-  };
 }
 
 function getCategoryFromImageName(imageName, categories) {
@@ -147,4 +139,44 @@ document.getElementById('regionFilter').addEventListener('change', () => {
 
 document.getElementById('categoryFilter').addEventListener('change', () => {
   updateMarkers(allLocations);
+});
+
+function openModal(location) {
+  const modal = document.getElementById('locationModal');
+  const modalContent = document.getElementById('modal-content');
+  const modalTitle = document.getElementById('modal-title');
+  const modalBody = document.getElementById('modal-body');
+  const modalImages = document.getElementById('modal-images');
+  const modalInfo = document.getElementById('modal-info');
+
+  modalTitle.textContent = location.city;
+  modalBody.textContent = `Price: ${location.prices}\n${location.additionalInfo}`;
+  modalImages.innerHTML = '';
+
+  location.images.forEach((image, index) => {
+    const category = getCategoryFromImageName(image, location.categories);
+    let fullPath;
+    if (location.region) {
+      fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
+    } else {
+      fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
+    }
+
+    const imgElement = document.createElement('img');
+    imgElement.src = fullPath;
+    imgElement.alt = `Image ${index + 1}`;
+    modalImages.appendChild(imgElement);
+  });
+
+  modal.style.display = 'block';
+}
+
+document.getElementById('modal-close').addEventListener('click', () => {
+  document.getElementById('locationModal').style.display = 'none';
+});
+
+document.addEventListener('click', event => {
+  if (event.target == document.getElementById('locationModal')) {
+    document.getElementById('locationModal').style.display = 'none';
+  }
 });

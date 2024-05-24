@@ -1,10 +1,13 @@
+TS_LOCATIONS = ./public/js/locationsMetadata.ts
 TS_GEN_DATA = ./public/js/generateMetadata.ts
 JS_GEN_DATA = ./public/js/generateMetadata.js
 JS_RENAME_FILE = ./public/js/rename_files.js
 JS_UPDATE_CONFIG = ./public/js/update_config.js
 JS_SERVER = server.js
 
-run:
+runAll:
+	@echo "Running $(TS_LOCATIONS) TS_LOCATIONS for enum locations"
+	tsc $(TS_LOCATIONS)
 	@echo "Running $(TS_GEN_DATA) TS_GEN_DATA generate JS file"
 	tsc $(TS_GEN_DATA)
 	@echo "Running $(JS_GEN_DATA) JS_GEN_DATA to create metada for coordinates"

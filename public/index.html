@@ -23,14 +23,13 @@
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="js/map.js" type="module"></script>
 
-    <div id="imageModal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <h2 id="modalTitle"></h2>
-            <div id="modalInfo"></div>
-            <div id="modalBody"></div>
+    <div id="locationModal" class="modal">
+        <div class="modal-content" id="modal-content">
+          <span class="modal-close" id="modal-close">&times;</span>
+          <h2 id="modal-title"></h2>
+          <p id="modal-body"></p>
+          <div id="modal-images" class="modal-images"></div>
         </div>
-    </div>
-
+      </div>
 </body>
 </html>
