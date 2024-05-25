@@ -147,7 +147,10 @@ function openModal(location, parentLocation = null) {
   modalBody.textContent = `Price: ${location.prices || 'N/A'}\n${location.additionalInfo || 'N/A'}`;
   modalImages.innerHTML = '';
 
-  (location.images || parentLocation.images).forEach((image, index) => {
+  const images = location.images || parentLocation.images;
+
+  images.forEach((image, index) => {
+    if (!/^(jpg|jpeg|png|gif)$/.test(image.split('.').pop())) return;
     let fullPath;
     const category = getCategoryFromImageName(image, location.categories || parentLocation.categories);
 
