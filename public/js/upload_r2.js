@@ -17,7 +17,6 @@ const s3 = new AWS.S3({
 
 const remotePrefix = 'ph/mindanao/davao_del_sur/davao/bars/';
 const localImageDir = path.join(__dirname, `../../uploads/${remotePrefix}`);
-// const localImageDir = path.join(__dirname, '../../uploads/br/sp/eldorado/caves');
 
 fs.readdir(localImageDir, (err, files) => {
   if (err) {

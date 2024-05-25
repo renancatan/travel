@@ -10,30 +10,47 @@ const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
 let allLocations = [];
 let markers = [];
 
-// Define icons for categories
 const categoryIcons = {
-  bar: L.icon({ iconUrl: 'path/to/bar-icon.png', iconSize: [30, 30] }),
+  bar: L.icon({ iconUrl: `${workerBaseURL + "/"}bar-icon2.jpg`, iconSize: [30, 30] }),
   beach: L.icon({ iconUrl: 'path/to/beach-icon.png', iconSize: [30, 30] }),
   cave: L.icon({ iconUrl: 'path/to/cave-icon.png', iconSize: [30, 30] }),
   // Add more categories as needed
-  default: L.icon({ iconUrl: 'path/to/default-icon.png', iconSize: [30, 30] })
+  default: L.icon({ iconUrl: `${workerBaseURL + "/" + "Drink-Beer-icon.png"}`, iconSize: [40, 40] })
 };
 
-fetch('/data')
+fetch('/metadata.json')
   .then(response => {
     if (!response.ok) {
       throw new Error('Network response was not ok ' + response.statusText);
     }
     return response.json();
   })
-  .then(mergedData => {
-    console.log('Merged data:', JSON.stringify(mergedData, null, 2));
-    allLocations = mergedData;
-    populateFilters(mergedData, 'regionFilter', 'categoryFilter');
-    updateMarkers(mergedData);
+  .then(primaryData => {
+    console.log('Primary data:', JSON.stringify(primaryData, null, 2));
+
+    fetch('/data')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Network response was not ok ' + response.statusText);
+        }
+        return response.json();
+      })
+      .then(secondaryData => {
+        console.log('Google Sheets data:', JSON.stringify(secondaryData, null, 2));
+        const mergedData = primaryData.concat(secondaryData);
+        allLocations = mergedData;
+        populateFilters(mergedData, 'regionFilter', 'categoryFilter');
+        updateMarkers(mergedData);
+      })
+      .catch(error => {
+        console.error('Failed to fetch data:', error);
+        allLocations = primaryData;
+        populateFilters(primaryData, 'regionFilter', 'categoryFilter');
+        updateMarkers(primaryData);
+      });
   })
   .catch(error => {
-    console.error('Failed to fetch data:', error);
+    console.error('Failed to fetch metadata:', error);
   });
 
 function removeMarkers() {
@@ -68,6 +85,7 @@ function processLocation(location, selectedRegion, selectedCategory) {
       marker.bindTooltip(tooltip);
 
       marker.on('click', () => openModal(location));
+
     } else {
       console.log(`Skipping location: ${location.city}`);
     }
@@ -113,24 +131,25 @@ function openModal(location) {
   const modalInfo = document.getElementById('modal-info');
 
   modalTitle.textContent = location.city;
-  modalBody.innerHTML = `Price: ${location.prices}<br>${location.additionalInfo}`;
+  modalBody.textContent = `Price: ${location.prices}\n${location.additionalInfo}`;
   modalImages.innerHTML = '';
 
-  // Display main image separately
-  if (location.images.length > 0) {
-    const mainImage = location.images[0];
-    const mainImagePath = `${workerBaseURL}/${location.country}/${location.region || ''}/${location.province}/${location.city}/${location.categories[0]}/${mainImage}`.replace('//', '/');
-    const mainImgElement = document.createElement('img');
-    mainImgElement.src = mainImagePath;
-    mainImgElement.alt = `Main Image for ${location.city}`;
-    mainImgElement.classList.add('main-image');
-    modalImages.appendChild(mainImgElement);
-  }
-
-  // Display other images
-  location.images.slice(1).forEach((image, index) => {
+  location.images.forEach((image, index) => {
     const category = getCategoryFromImageName(image, location.categories);
-    let fullPath = `${workerBaseURL}/${location.country}/${location.region || ''}/${location.province}/${location.city}/${category}/${image}`.replace('//', '/');
+    let fullPath;
+    if (location.region) {
+      if (location.subCategory) {
+        fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${location.subCategory}/${image}`;
+      } else {
+        fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
+      }
+    } else {
+      if (location.subCategory) {
+        fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${location.subCategory}/${image}`;
+      } else {
+        fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
+      }
+    }
 
     const imgElement = document.createElement('img');
     imgElement.src = fullPath;
@@ -149,5 +168,4 @@ document.addEventListener('click', event => {
   if (event.target == document.getElementById('locationModal')) {
     document.getElementById('locationModal').style.display = 'none';
   }
-}
-);
+});

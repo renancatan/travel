@@ -11,6 +11,7 @@ interface Location {
     coordinates: [number, number];
     categories: CATEGORY[];
     images: string[];
+    subCategory?: string;
 }
 
 const metadata: Location[] = [];
@@ -22,11 +23,15 @@ function addLocation(
     coordinates: [number, number],
     categories: CATEGORY[],
     images: string[] = [],
-    region?: REGION
+    region?: REGION,
+    subCategory?: string
 ) {
     const location: Location = { country, province, city, coordinates, categories, images };
     if (region) {
         location.region = region;
+    }
+    if (subCategory) {
+        location.subCategory = subCategory;
     }
     metadata.push(location);
 }
@@ -37,7 +42,8 @@ function saveMetadata(filePath: string) {
 
 addLocation(COUNTRY.BR, PROVINCE.SP, CITY.ELDORADO, [-24.5281, -48.1104], [CATEGORY.CAVES]);
 addLocation(COUNTRY.PH, PROVINCE.DAVAO_DEL_SUR, CITY.DAVAO, [7.1907, 125.4553], [CATEGORY.BEACHES, CATEGORY.BARS], [], REGION.MINDANAO);
-addLocation(COUNTRY.PH, PROVINCE.DAVAO_DEL_SUR, CITY.DAVAO, [7.0914, 125.6109], [CATEGORY.CAVES], [], REGION.MINDANAO);
+addLocation(COUNTRY.PH, PROVINCE.DAVAO_DEL_SUR, CITY.DAVAO, [7.0914, 125.6109], [CATEGORY.BARS], [], REGION.MINDANAO, 'bar_nameX');
+addLocation(COUNTRY.PH, PROVINCE.DAVAO_DEL_SUR, CITY.DAVAO, [7.0814, 125.6209], [CATEGORY.BARS], [], REGION.MINDANAO, 'bar_nameY');
 addLocation(COUNTRY.PH, PROVINCE.CEBU, CITY.CEBU, [10.3157, 123.8854], [CATEGORY.BEACHES], [], REGION.VISAYAS);
 
 const outputFilePath = path.join(process.cwd(), 'metadata.json');
