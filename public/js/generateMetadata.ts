@@ -6,6 +6,7 @@ interface SubLocation {
     name: string;
     coordinates: [number, number];
     images: string[];
+    category: CATEGORY;
 }
 
 interface Location {
@@ -44,17 +45,17 @@ function saveMetadata(filePath: string) {
     console.log(`Metadata saved to ${filePath}`);
 }
 
-// Example locations with sub-locations
+// Adding locations
 addLocation(
     COUNTRY.PH, 
     PROVINCE.DAVAO_DEL_SUR, 
     CITY.DAVAO, 
     [7.1907, 125.4553], 
-    [CATEGORY.BARS, CATEGORY.GENERAL], 
+    [CATEGORY.GENERAL, CATEGORY.BARS], 
     [], 
     [
-        { name: "bar_name", coordinates: [7.1917, 125.4530], images: [] },
-        { name: "Bar B", coordinates: [7.1920, 125.4560], images: [] }
+        { name: "bar_name", coordinates: [7.1917, 125.4530], images: [], category: CATEGORY.BARS },
+        { name: "Bar B", coordinates: [7.1920, 125.4560], images: [], category: CATEGORY.BARS }
     ], 
     REGION.MINDANAO
 );
@@ -64,11 +65,12 @@ addLocation(
     PROVINCE.DAVAO_DEL_SUR, 
     CITY.DAVAO, 
     [7.2100, 125.4800], 
-    [CATEGORY.BEACHES], 
+    [CATEGORY.GENERAL, CATEGORY.BEACHES], 
     [], 
     [
-        { name: "Beach A", coordinates: [7.2110, 125.4810], images: [] },
-        { name: "Beach B", coordinates: [7.2120, 125.4850], images: [] }
+        { name: "Beach A", coordinates: [7.2110, 125.4810], images: [], category: CATEGORY.BEACHES },
+        { name: "Beach B", coordinates: [7.2120, 125.4850], images: [], category: CATEGORY.BEACHES },
+        { name: "general_area1", coordinates: [7.2100, 125.4800], images: [], category: CATEGORY.GENERAL }
     ], 
     REGION.MINDANAO
 );
@@ -78,9 +80,11 @@ addLocation(
     PROVINCE.DAVAO_DEL_SUR, 
     CITY.DAVAO, 
     [7.2300, 125.5000], 
+    [CATEGORY.GENERAL], 
     [], 
-    [], 
-    [],
+    [
+        { name: "general_area2", coordinates: [7.2300, 125.5000], images: [], category: CATEGORY.GENERAL }
+    ], 
     REGION.MINDANAO
 );
 
