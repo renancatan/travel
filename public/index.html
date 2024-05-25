@@ -6,19 +6,14 @@
     <title>Leaflet Map Example</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
     <link rel="stylesheet" href="css/styles.css" />
-    <style>
-        #map { height: 600px; }
-        .filters { margin-bottom: 20px; }
-    </style>
 </head>
 <body>
     <h1>Leaflet Map Example</h1>
-    <div class="filters">
+    <div>
         <label for="regionFilter">Region:</label>
         <select id="regionFilter">
             <option value="all">All</option>
         </select>
-        
         <label for="categoryFilter">Category:</label>
         <select id="categoryFilter">
             <option value="all">All</option>
@@ -27,5 +22,14 @@
     <div id="map" style="height: 600px;"></div>
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
     <script src="js/map.js" type="module"></script>
+
+    <div id="locationModal" class="modal">
+        <div class="modal-content" id="modal-content">
+          <span class="modal-close" id="modal-close">&times;</span>
+          <h2 id="modal-title"></h2>
+          <p id="modal-body"></p>
+          <div id="modal-images" class="modal-images"></div>
+        </div>
+      </div>
 </body>
 </html>

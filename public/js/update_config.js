@@ -26,8 +26,24 @@ function updateMetadataWithImages(basePath, metadata) {
                             location.images.push(file);
                         }
                     });
+
+                    if (location.subLocations) {
+                        location.subLocations.forEach(subLocation => {
+                            const subLocationPath = path.join(categoryPath, subLocation.name);
+                            if (fs.existsSync(subLocationPath) && fs.lstatSync(subLocationPath).isDirectory()) {
+                                const subLocationFiles = fs.readdirSync(subLocationPath);
+                                subLocation.images = [];
+                                subLocationFiles.forEach(file => {
+                                    const filePath = path.join(subLocationPath, file);
+                                    if (!fs.lstatSync(filePath).isDirectory()) {
+                                        subLocation.images.push(file);
+                                    }
+                                });
+                            }
+                        });
+                    }
                 } else {
-                    console.log(`Path does not exist or is not a directory: ${categoryPath}`);
+                    console.log(`Category path does not exist or is not a directory: ${categoryPath}`);
                 }
             });
         } else {
