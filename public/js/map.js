@@ -70,7 +70,6 @@ function processLocation(location, selectedRegion, selectedCategory) {
     if (regionMatches && categoryMatches) {
       console.log(`Adding marker for location: ${location.city}`);
       
-      // Choose icon based on category
       const category = location.categories.length > 0 ? location.categories[0] : 'default';
       const icon = categoryIcons[category] || categoryIcons.default;
 
@@ -84,8 +83,7 @@ function processLocation(location, selectedRegion, selectedCategory) {
       marker.bindTooltip(tooltip);
 
       marker.on('click', () => openModal(location));
-      
-      // Add markers for sub-locations
+
       if (location.subLocations) {
         location.subLocations.forEach(subLoc => {
           const subMarker = L.marker(subLoc.coordinates, { icon }).addTo(map);
@@ -145,21 +143,18 @@ function openModal(location, parentLocation = null) {
   const modalImages = document.getElementById('modal-images');
   const modalInfo = document.getElementById('modal-info');
 
-  modalTitle.textContent = parentLocation ? `${parentLocation.city} - ${location.name}` : location.city;
-  modalBody.textContent = `Price: ${location.prices || 'N/A'}\n${location.additionalInfo || 'No additional info'}`;
+  modalTitle.textContent = location.city || parentLocation.city;
+  modalBody.textContent = `Price: ${location.prices || 'N/A'}\n${location.additionalInfo || 'N/A'}`;
   modalImages.innerHTML = '';
 
-  location.images.forEach((image, index) => {
-    const category = getCategoryFromImageName(image, location.categories);
+  (location.images || parentLocation.images).forEach((image, index) => {
     let fullPath;
-    if (parentLocation && parentLocation.region) {
-      fullPath = `${workerBaseURL}/${parentLocation.country}/${parentLocation.region}/${parentLocation.province}/${parentLocation.city}/${category}/${location.name}/${image}`;
-    } else if (parentLocation) {
-      fullPath = `${workerBaseURL}/${parentLocation.country}/${parentLocation.province}/${parentLocation.city}/${category}/${location.name}/${image}`;
-    } else if (location.region) {
-      fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
+    const category = getCategoryFromImageName(image, location.categories || parentLocation.categories);
+
+    if (parentLocation) {
+      fullPath = `${workerBaseURL}/${location.country || parentLocation.country}/${location.region || parentLocation.region}/${location.province || parentLocation.province}/${location.city || parentLocation.city}/${category}/${location.name || parentLocation.name}/${image}`;
     } else {
-      fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
+      fullPath = `${workerBaseURL}/${location.country}/${location.region || ''}/${location.province}/${location.city}/${category}/${image}`;
     }
 
     const imgElement = document.createElement('img');
@@ -177,6 +172,6 @@ document.getElementById('modal-close').addEventListener('click', () => {
 
 document.addEventListener('click', event => {
   if (event.target == document.getElementById('locationModal')) {
-    document.getElementById('locationModal').style.display = 'none';
+      document.getElementById('locationModal').style.display = 'none';
   }
 });

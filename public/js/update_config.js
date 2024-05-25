@@ -2,26 +2,19 @@ const fs = require('fs');
 const path = require('path');
 const metadata = require('./metadata.json');
 
-function updateConfigWithImages(basePath, metadata) {
-    const config = {
-        locations: {}
-    };
-
+function updateMetadataWithImages(basePath, metadata) {
     metadata.forEach(location => {
-        const countryData = config.locations[location.country] = config.locations[location.country] || { name: location.country, regions: {}, provinces: {} };
-        const regionData = countryData.regions[location.region] = countryData.regions[location.region] || { name: location.region, provinces: {} };
-        const provinceData = regionData.provinces[location.province] = regionData.provinces[location.province] || { name: location.province, cities: {} };
-        const cityData = provinceData.cities[location.city] = provinceData.cities[location.city] || { name: location.city, coordinates: location.coordinates, images: [], categories: location.categories, subLocations: {} };
-
         const locationPath = path.join(basePath, location.country, location.region || '', location.province, location.city);
         if (fs.existsSync(locationPath) && fs.lstatSync(locationPath).isDirectory()) {
+            const images = [];
             const files = fs.readdirSync(locationPath);
             files.forEach(file => {
                 const filePath = path.join(locationPath, file);
                 if (!fs.lstatSync(filePath).isDirectory()) {
-                    cityData.images.push(file);
+                    images.push(file);
                 }
             });
+            location.images = images;
 
             location.categories.forEach(category => {
                 const categoryPath = path.join(locationPath, category);
@@ -30,7 +23,7 @@ function updateConfigWithImages(basePath, metadata) {
                     categoryFiles.forEach(file => {
                         const filePath = path.join(categoryPath, file);
                         if (!fs.lstatSync(filePath).isDirectory()) {
-                            cityData.images.push(file);
+                            location.images.push(file);
                         }
                     });
 
@@ -39,38 +32,40 @@ function updateConfigWithImages(basePath, metadata) {
                             const subLocationPath = path.join(categoryPath, subLocation.name);
                             if (fs.existsSync(subLocationPath) && fs.lstatSync(subLocationPath).isDirectory()) {
                                 const subLocationFiles = fs.readdirSync(subLocationPath);
+                                subLocation.images = [];
                                 subLocationFiles.forEach(file => {
                                     const filePath = path.join(subLocationPath, file);
                                     if (!fs.lstatSync(filePath).isDirectory()) {
-                                        cityData.subLocations[subLocation.name] = cityData.subLocations[subLocation.name] || { name: subLocation.name, coordinates: subLocation.coordinates, images: [] };
-                                        cityData.subLocations[subLocation.name].images.push(file);
+                                        subLocation.images.push(file);
                                     }
                                 });
                             }
                         });
                     }
+                } else {
+                    console.log(`Category path does not exist or is not a directory: ${categoryPath}`);
                 }
             });
+        } else {
+            console.log(`Path does not exist or is not a directory: ${locationPath}`);
         }
     });
 
-    return config;
+    return metadata;
 }
 
-function saveConfig(filePath, config) {
-    const configContent = `export const locations = ${JSON.stringify(config, null, 2)};`;
-    fs.writeFileSync(filePath, configContent, 'utf8');
+function saveMetadata(filePath, metadata) {
+    fs.writeFileSync(filePath, JSON.stringify(metadata, null, 2), 'utf8');
 }
 
 function main() {
     const basePath = path.join(__dirname, '../../uploads');
-    const updatedConfig = updateConfigWithImages(basePath, metadata);
+    const updatedMetadata = updateMetadataWithImages(basePath, metadata);
 
-    const outputPath = path.join(__dirname, 'config.js');
-    console.log("Output path config.js for update_config: ", outputPath);
-    saveConfig(outputPath, updatedConfig);
+    const outputPath = path.join(__dirname, 'metadata.json');
+    saveMetadata(outputPath, updatedMetadata);
 
-    console.log('Config updated successfully!');
+    console.log('Metadata updated successfully!');
 }
 
 main();

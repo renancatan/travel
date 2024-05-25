@@ -50,7 +50,7 @@ addLocation(
     PROVINCE.DAVAO_DEL_SUR, 
     CITY.DAVAO, 
     [7.1907, 125.4553], 
-    [CATEGORY.BARS], 
+    [CATEGORY.BARS, CATEGORY.GENERAL], 
     [], 
     [
         { name: "bar_name", coordinates: [7.1917, 125.4530], images: [] },
