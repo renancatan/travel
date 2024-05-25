@@ -143,17 +143,19 @@ function openModal(location, parentLocation = null) {
   const modalImages = document.getElementById('modal-images');
   const modalInfo = document.getElementById('modal-info');
 
-  modalTitle.textContent = location.city || parentLocation.city;
-  modalBody.textContent = `Price: ${location.prices || 'N/A'}\n${location.additionalInfo || 'N/A'}`;
+  if (!modal || !modalContent || !modalTitle || !modalBody || !modalImages || !modalInfo) {
+    console.error('One or more modal elements are missing.');
+  }
+
+  modalTitle.textContent = location.city || parentLocation?.city || 'Unknown';
+  modalBody.textContent = `Price: ${location.prices || parentLocation?.prices || 'N/A'}\n${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}`;
   modalImages.innerHTML = '';
 
-  const images = location.images || parentLocation.images;
-
+  const images = location.images || parentLocation?.images || [];
   images.forEach((image, index) => {
     if (!/^(jpg|jpeg|png|gif)$/.test(image.split('.').pop())) return;
     let fullPath;
-    const category = getCategoryFromImageName(image, location.categories || parentLocation.categories);
-
+    const category = getCategoryFromImageName(image, location.categories || parentLocation?.categories || []);
     if (parentLocation) {
       fullPath = `${workerBaseURL}/${location.country || parentLocation.country}/${location.region || parentLocation.region}/${location.province || parentLocation.province}/${location.city || parentLocation.city}/${category}/${location.name || parentLocation.name}/${image}`;
     } else {
@@ -166,15 +168,37 @@ function openModal(location, parentLocation = null) {
     modalImages.appendChild(imgElement);
   });
 
+  const videos = location.videos || parentLocation?.videos || [];
+  videos.forEach((video, index) => {
+    if (video.includes("youtube.com/embed/")) {
+      const iframeElement = document.createElement('iframe');
+      iframeElement.src = video;
+      iframeElement.width = "560";
+      iframeElement.height = "315";
+      iframeElement.frameBorder = "0";
+      iframeElement.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+      iframeElement.allowFullscreen = true;
+      modalImages.appendChild(iframeElement);
+    } else {
+      const errorText = document.createElement('p');
+      errorText.textContent = `Video URL is not embeddable: ${video}`;
+      modalImages.appendChild(errorText);
+    }
+  });
+
   modal.style.display = 'block';
 }
 
 document.getElementById('modal-close').addEventListener('click', () => {
-  document.getElementById('locationModal').style.display = 'none';
+  const modal = document.getElementById('locationModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
 });
 
 document.addEventListener('click', event => {
-  if (event.target == document.getElementById('locationModal')) {
-      document.getElementById('locationModal').style.display = 'none';
+  const modal = document.getElementById('locationModal');
+  if (event.target === modal) {
+    modal.style.display = 'none';
   }
 });
