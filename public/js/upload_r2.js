@@ -1,11 +1,13 @@
 const AWS = require('aws-sdk');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config({path: '../../.env'});
+require('dotenv').config({path: '.env'});
 
 const r2AccessKey = process.env.R2_ACCESS_KEY;
 const r2SecretKey = process.env.R2_SECRET_KEY;
 const bucketName = 'travels';
+console.log('R2_ACCESS_KEY:', process.env.R2_ACCESS_KEY);
+console.log('R2_SECRET_KEY:', process.env.R2_SECRET_KEY);
 
 const s3 = new AWS.S3({
   accessKeyId: r2AccessKey,
@@ -15,7 +17,8 @@ const s3 = new AWS.S3({
   signatureVersion: 'v4',
 });
 
-const remotePrefix = 'ph/mindanao/davao_del_sur/davao/bars/';
+const place = "ph/mindanao/davao_del_sur/davao"
+const remotePrefix = `${place}/bars/bar_name/`;
 const localImageDir = path.join(__dirname, `../../uploads/${remotePrefix}`);
 
 fs.readdir(localImageDir, (err, files) => {

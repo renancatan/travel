@@ -5,39 +5,68 @@ const readline = require('readline');
 const metadata = JSON.parse(fs.readFileSync(path.join(__dirname, 'metadata.json'), 'utf8'));
 
 function renameFiles(basePath, metadata) {
+    console.log(`Starting renaming process in base path: ${basePath}`);
     metadata.forEach(location => {
         const locationPath = path.join(basePath, location.country, location.region || '', location.province, location.city);
+        console.log(`Processing location: ${location.city} at path: ${locationPath}`);
+        
         if (fs.existsSync(locationPath) && fs.lstatSync(locationPath).isDirectory()) {
+            console.log(`Found location directory: ${locationPath}`);
             renameFilesInDirectory(locationPath, location.city, 'general');
 
             location.categories.forEach(category => {
                 const categoryPath = path.join(locationPath, category);
+                console.log(`Processing category: ${category} at path: ${categoryPath}`);
+                
                 if (fs.existsSync(categoryPath) && fs.lstatSync(categoryPath).isDirectory()) {
+                    console.log(`Found category directory: ${categoryPath}`);
                     renameFilesInDirectory(categoryPath, location.city, category);
+
+                    // Check and rename files in sub-locations
+                    if (location.subLocations) {
+                        location.subLocations.forEach(subLoc => {
+                            const subLocPath = path.join(categoryPath, subLoc.name);
+                            console.log(`Processing sub-location: ${subLoc.name} at path: ${subLocPath}`);
+                            
+                            if (fs.existsSync(subLocPath) && fs.lstatSync(subLocPath).isDirectory()) {
+                                console.log(`Found sub-location directory: ${subLocPath}`);
+                                renameFilesInDirectory(subLocPath, location.city, category, subLoc.name);
+                            } else {
+                                console.log(`Sub-location path does not exist or is not a directory: ${subLocPath}`);
+                            }
+                        });
+                    } else {
+                        console.log(`No sub-locations found for category: ${category}`);
+                    }
                 } else {
-                    console.log(`Path does not exist or is not a directory: ${categoryPath}`);
+                    console.log(`Category path does not exist or is not a directory: ${categoryPath}`);
                 }
             });
         } else {
-            console.log(`Path does not exist or is not a directory: ${locationPath}`);
+            console.log(`Location path does not exist or is not a directory: ${locationPath}`);
         }
     });
 }
 
-function renameFilesInDirectory(directoryPath, city, category) {
+function renameFilesInDirectory(directoryPath, city, category, subLocation = null) {
     const files = fs.readdirSync(directoryPath);
+    console.log(`Renaming files in directory: ${directoryPath}, found ${files.length} files.`);
     let counter = 1;
 
     files.forEach(file => {
         const filePath = path.join(directoryPath, file);
         if (!fs.lstatSync(filePath).isDirectory()) {
             const ext = path.extname(file);
-            const newName = `${city}_${category}_${counter}${ext}`;
+            const newName = subLocation
+                ? `${city}_${category}_${subLocation}_${counter}${ext}`
+                : `${city}_${category}_${counter}${ext}`;
             const newPath = path.join(directoryPath, newName);
 
             console.log(`Renaming file: ${filePath} to ${newPath}`);
             fs.renameSync(filePath, newPath);
             counter++;
+        } else {
+            console.log(`Skipping directory: ${filePath}`);
         }
     });
 }

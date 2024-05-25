@@ -11,11 +11,10 @@ let allLocations = [];
 let markers = [];
 
 const categoryIcons = {
-  bar: L.icon({ iconUrl: `${workerBaseURL + "/"}bar-icon2.jpg`, iconSize: [30, 30] }),
-  beach: L.icon({ iconUrl: 'path/to/beach-icon.png', iconSize: [30, 30] }),
-  cave: L.icon({ iconUrl: 'path/to/cave-icon.png', iconSize: [30, 30] }),
-  // Add more categories as needed
-  default: L.icon({ iconUrl: `${workerBaseURL + "/" + "Drink-Beer-icon.png"}`, iconSize: [40, 40] })
+  bar: L.icon({ iconUrl: `${workerBaseURL}/path/to/bar-icon.png`, iconSize: [30, 30] }),
+  beach: L.icon({ iconUrl: `${workerBaseURL}/path/to/beach-icon.png`, iconSize: [30, 30] }),
+  cave: L.icon({ iconUrl: `${workerBaseURL}/path/to/cave-icon.png`, iconSize: [30, 30] }),
+  default: L.icon({ iconUrl: `${workerBaseURL}/path/to/default-icon.png`, iconSize: [40, 40] })
 };
 
 fetch('/metadata.json')
@@ -85,6 +84,22 @@ function processLocation(location, selectedRegion, selectedCategory) {
       marker.bindTooltip(tooltip);
 
       marker.on('click', () => openModal(location));
+      
+      // Add markers for sub-locations
+      if (location.subLocations) {
+        location.subLocations.forEach(subLoc => {
+          const subMarker = L.marker(subLoc.coordinates, { icon }).addTo(map);
+          markers.push(subMarker);
+
+          const subTooltip = L.tooltip({
+            permanent: true,
+            direction: 'top'
+          }).setContent(`${location.city} - ${subLoc.name}`);
+          subMarker.bindTooltip(subTooltip);
+
+          subMarker.on('click', () => openModal(subLoc, location));
+        });
+      }
 
     } else {
       console.log(`Skipping location: ${location.city}`);
@@ -122,7 +137,7 @@ document.getElementById('categoryFilter').addEventListener('change', () => {
   updateMarkers(allLocations);
 });
 
-function openModal(location) {
+function openModal(location, parentLocation = null) {
   const modal = document.getElementById('locationModal');
   const modalContent = document.getElementById('modal-content');
   const modalTitle = document.getElementById('modal-title');
@@ -130,25 +145,21 @@ function openModal(location) {
   const modalImages = document.getElementById('modal-images');
   const modalInfo = document.getElementById('modal-info');
 
-  modalTitle.textContent = location.city;
-  modalBody.textContent = `Price: ${location.prices}\n${location.additionalInfo}`;
+  modalTitle.textContent = parentLocation ? `${parentLocation.city} - ${location.name}` : location.city;
+  modalBody.textContent = `Price: ${location.prices || 'N/A'}\n${location.additionalInfo || 'No additional info'}`;
   modalImages.innerHTML = '';
 
   location.images.forEach((image, index) => {
     const category = getCategoryFromImageName(image, location.categories);
     let fullPath;
-    if (location.region) {
-      if (location.subCategory) {
-        fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${location.subCategory}/${image}`;
-      } else {
-        fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
-      }
+    if (parentLocation && parentLocation.region) {
+      fullPath = `${workerBaseURL}/${parentLocation.country}/${parentLocation.region}/${parentLocation.province}/${parentLocation.city}/${category}/${location.name}/${image}`;
+    } else if (parentLocation) {
+      fullPath = `${workerBaseURL}/${parentLocation.country}/${parentLocation.province}/${parentLocation.city}/${category}/${location.name}/${image}`;
+    } else if (location.region) {
+      fullPath = `${workerBaseURL}/${location.country}/${location.region}/${location.province}/${location.city}/${category}/${image}`;
     } else {
-      if (location.subCategory) {
-        fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${location.subCategory}/${image}`;
-      } else {
-        fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
-      }
+      fullPath = `${workerBaseURL}/${location.country}/${location.province}/${location.city}/${category}/${image}`;
     }
 
     const imgElement = document.createElement('img');
