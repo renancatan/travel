@@ -11,11 +11,13 @@ let allLocations = [];
 let markers = [];
 
 const categoryIcons = {
-  bar: L.icon({ iconUrl: `${workerBaseURL}/path/to/bar-icon.png`, iconSize: [30, 30] }),
-  beach: L.icon({ iconUrl: `${workerBaseURL}/path/to/beach-icon.png`, iconSize: [30, 30] }),
-  cave: L.icon({ iconUrl: `${workerBaseURL}/path/to/cave-icon.png`, iconSize: [30, 30] }),
-  default: L.icon({ iconUrl: `${workerBaseURL}/path/to/default-icon.png`, iconSize: [40, 40] })
+  bars: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/bar.png`, iconSize: [40, 40] }),
+  beaches: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/beach.png`, iconSize: [50, 50] }),
+  caves: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/cave.png`, iconSize: [50, 50] }),
+  general: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] }),
+  default: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] })
 };
+
 
 fetch('/metadata.json')
   .then(response => {
@@ -70,7 +72,7 @@ function processLocation(location, selectedRegion, selectedCategory) {
     if (regionMatches && categoryMatches) {
       console.log(`Adding marker for location: ${location.city}`);
       
-      const category = location.categories.length > 0 ? location.categories[0] : 'default';
+      const category = location.categories.length > 0 ? location.categories[0] : 'general';
       const icon = categoryIcons[category] || categoryIcons.default;
 
       const marker = L.marker(location.coordinates, { icon }).addTo(map);
@@ -86,7 +88,9 @@ function processLocation(location, selectedRegion, selectedCategory) {
 
       if (location.subLocations) {
         location.subLocations.forEach(subLoc => {
-          const subMarker = L.marker(subLoc.coordinates, { icon }).addTo(map);
+          const subCategory = subLoc.category || 'general';
+          const subIcon = categoryIcons[subCategory] || categoryIcons.default;
+          const subMarker = L.marker(subLoc.coordinates, { icon: subIcon }).addTo(map);
           markers.push(subMarker);
 
           const subTooltip = L.tooltip({
@@ -106,6 +110,7 @@ function processLocation(location, selectedRegion, selectedCategory) {
     console.log(`Invalid coordinates for ${location.city}`);
   }
 }
+
 
 function getCategoryFromImageName(imageName, categories) {
   for (const category of categories) {
