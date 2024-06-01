@@ -142,30 +142,44 @@ document.getElementById('categoryFilter').addEventListener('change', () => {
 
 function openModal(location, parentLocation = null) {
   const modal = document.getElementById('locationModal');
-  const modalContent = document.getElementById('modal-content');
   const modalTitle = document.getElementById('modal-title');
   const modalBody = document.getElementById('modal-body');
   const modalImages = document.getElementById('modal-images');
-  const modalInfo = document.getElementById('modal-info');
 
-  if (!modal || !modalContent || !modalTitle || !modalBody || !modalImages || !modalInfo) {
+  if (!modal || !modalTitle || !modalBody || !modalImages) {
     console.error('One or more modal elements are missing.');
+    return;
   }
 
-  modalTitle.textContent = location.city || parentLocation?.city || 'Unknown';
-  modalBody.textContent = `Price: ${location.prices || parentLocation?.prices || 'N/A'}\n${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}`;
+  const title = parentLocation ? `${parentLocation.city} - ${location.name}` : location.city;
+  const bodyText = `Price: ${location.prices || parentLocation?.prices || 'N/A'} ${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}`;
+  const images = location.images.length > 0 ? location.images : parentLocation ? parentLocation.images : [];
+
+  modalTitle.textContent = title;
+  modalBody.textContent = bodyText;
   modalImages.innerHTML = '';
 
-  const images = location.images || parentLocation?.images || [];
   images.forEach((image, index) => {
     if (!/^(jpg|jpeg|png|gif)$/.test(image.split('.').pop())) return;
+
     let fullPath;
-    const category = getCategoryFromImageName(image, location.categories || parentLocation?.categories || []);
-    if (parentLocation) {
-      fullPath = `${workerBaseURL}/${location.country || parentLocation.country}/${location.region || parentLocation.region}/${location.province || parentLocation.province}/${location.city || parentLocation.city}/${category}/${location.name || parentLocation.name}/${image}`;
+    const category = location.categories.length > 0 ? location.categories[0] : (parentLocation ? parentLocation.categories[0] : 'general');
+    
+    const country = location.country || parentLocation?.country || 'unknown';
+    const region = location.region || parentLocation?.region || '';
+    const province = location.province || parentLocation?.province || 'unknown';
+    const city = location.city || parentLocation?.city || 'unknown';
+    const subLocationName = location.isSublocation ? location.name.toLowerCase().replace(/ /g, '_') : '';
+
+    if (location.isSublocation) {
+      fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${subLocationName}/${image}`;
     } else {
-      fullPath = `${workerBaseURL}/${location.country}/${location.region || ''}/${location.province}/${location.city}/${category}/${image}`;
+      fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${image}`;
     }
+
+    // Debugging lines
+    console.log(`Image path: ${fullPath}`);
+    console.log(`country: ${country}, region: ${region}, province: ${province}, city: ${city}, category: ${category}, subLocationName: ${subLocationName}`);
 
     const imgElement = document.createElement('img');
     imgElement.src = fullPath;
@@ -173,7 +187,7 @@ function openModal(location, parentLocation = null) {
     modalImages.appendChild(imgElement);
   });
 
-  const videos = location.videos || parentLocation?.videos || [];
+  const videos = location.videos.length > 0 ? location.videos : parentLocation ? parentLocation.videos : [];
   videos.forEach((video, index) => {
     if (video.includes("youtube.com/embed/")) {
       const iframeElement = document.createElement('iframe');

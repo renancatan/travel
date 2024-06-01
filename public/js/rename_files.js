@@ -23,20 +23,16 @@ function renameFiles(basePath, metadata) {
                     renameFilesInDirectory(categoryPath, location.city, category);
 
                     // Check and rename files in sub-locations
-                    if (location.subLocations) {
-                        location.subLocations.forEach(subLoc => {
-                            const subLocPath = path.join(categoryPath, subLoc.name);
-                            console.log(`Processing sub-location: ${subLoc.name} at path: ${subLocPath}`);
-                            
-                            if (fs.existsSync(subLocPath) && fs.lstatSync(subLocPath).isDirectory()) {
-                                console.log(`Found sub-location directory: ${subLocPath}`);
-                                renameFilesInDirectory(subLocPath, location.city, category, subLoc.name);
-                            } else {
-                                console.log(`Sub-location path does not exist or is not a directory: ${subLocPath}`);
-                            }
-                        });
-                    } else {
-                        console.log(`No sub-locations found for category: ${category}`);
+                    if (location.name) {
+                        const subLocPath = path.join(categoryPath, location.name.toLowerCase().replace(/ /g, '_'));
+                        console.log(`Processing sub-location: ${location.name} at path: ${subLocPath}`);
+                        
+                        if (fs.existsSync(subLocPath) && fs.lstatSync(subLocPath).isDirectory()) {
+                            console.log(`Found sub-location directory: ${subLocPath}`);
+                            renameFilesInDirectory(subLocPath, location.city, category, location.name.toLowerCase().replace(/ /g, '_'));
+                        } else {
+                            console.log(`Sub-location path does not exist or is not a directory: ${subLocPath}`);
+                        }
                     }
                 } else {
                     console.log(`Category path does not exist or is not a directory: ${categoryPath}`);
