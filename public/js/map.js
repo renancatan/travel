@@ -11,11 +11,13 @@ let allLocations = [];
 let markers = [];
 
 const categoryIcons = {
-  bar: L.icon({ iconUrl: `${workerBaseURL}/path/to/bar-icon.png`, iconSize: [30, 30] }),
-  beach: L.icon({ iconUrl: `${workerBaseURL}/path/to/beach-icon.png`, iconSize: [30, 30] }),
-  cave: L.icon({ iconUrl: `${workerBaseURL}/path/to/cave-icon.png`, iconSize: [30, 30] }),
-  default: L.icon({ iconUrl: `${workerBaseURL}/path/to/default-icon.png`, iconSize: [40, 40] })
+  bars: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/bar.png`, iconSize: [40, 40] }),
+  beaches: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/beach.png`, iconSize: [50, 50] }),
+  caves: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/cave.png`, iconSize: [50, 50] }),
+  general: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] }),
+  default: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] })
 };
+
 
 fetch('/metadata.json')
   .then(response => {
@@ -70,7 +72,7 @@ function processLocation(location, selectedRegion, selectedCategory) {
     if (regionMatches && categoryMatches) {
       console.log(`Adding marker for location: ${location.city}`);
       
-      const category = location.categories.length > 0 ? location.categories[0] : 'default';
+      const category = location.categories.length > 0 ? location.categories[0] : 'general';
       const icon = categoryIcons[category] || categoryIcons.default;
 
       const marker = L.marker(location.coordinates, { icon }).addTo(map);
@@ -86,7 +88,9 @@ function processLocation(location, selectedRegion, selectedCategory) {
 
       if (location.subLocations) {
         location.subLocations.forEach(subLoc => {
-          const subMarker = L.marker(subLoc.coordinates, { icon }).addTo(map);
+          const subCategory = subLoc.category || 'general';
+          const subIcon = categoryIcons[subCategory] || categoryIcons.default;
+          const subMarker = L.marker(subLoc.coordinates, { icon: subIcon }).addTo(map);
           markers.push(subMarker);
 
           const subTooltip = L.tooltip({
@@ -106,6 +110,7 @@ function processLocation(location, selectedRegion, selectedCategory) {
     console.log(`Invalid coordinates for ${location.city}`);
   }
 }
+
 
 function getCategoryFromImageName(imageName, categories) {
   for (const category of categories) {
@@ -137,28 +142,44 @@ document.getElementById('categoryFilter').addEventListener('change', () => {
 
 function openModal(location, parentLocation = null) {
   const modal = document.getElementById('locationModal');
-  const modalContent = document.getElementById('modal-content');
   const modalTitle = document.getElementById('modal-title');
   const modalBody = document.getElementById('modal-body');
   const modalImages = document.getElementById('modal-images');
-  const modalInfo = document.getElementById('modal-info');
 
-  modalTitle.textContent = location.city || parentLocation.city;
-  modalBody.textContent = `Price: ${location.prices || 'N/A'}\n${location.additionalInfo || 'N/A'}`;
+  if (!modal || !modalTitle || !modalBody || !modalImages) {
+    console.error('One or more modal elements are missing.');
+    return;
+  }
+
+  const title = parentLocation ? `${parentLocation.city} - ${location.name}` : location.city;
+  const bodyText = `Price: ${location.prices || parentLocation?.prices || 'N/A'} ${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}`;
+  const images = location.images.length > 0 ? location.images : parentLocation ? parentLocation.images : [];
+
+  modalTitle.textContent = title;
+  modalBody.textContent = bodyText;
   modalImages.innerHTML = '';
-
-  const images = location.images || parentLocation.images;
 
   images.forEach((image, index) => {
     if (!/^(jpg|jpeg|png|gif)$/.test(image.split('.').pop())) return;
-    let fullPath;
-    const category = getCategoryFromImageName(image, location.categories || parentLocation.categories);
 
-    if (parentLocation) {
-      fullPath = `${workerBaseURL}/${location.country || parentLocation.country}/${location.region || parentLocation.region}/${location.province || parentLocation.province}/${location.city || parentLocation.city}/${category}/${location.name || parentLocation.name}/${image}`;
+    let fullPath;
+    const category = location.categories.length > 0 ? location.categories[0] : (parentLocation ? parentLocation.categories[0] : 'general');
+    
+    const country = location.country || parentLocation?.country || 'unknown';
+    const region = location.region || parentLocation?.region || '';
+    const province = location.province || parentLocation?.province || 'unknown';
+    const city = location.city || parentLocation?.city || 'unknown';
+    const subLocationName = location.isSublocation ? location.name.toLowerCase().replace(/ /g, '_') : '';
+
+    if (location.isSublocation) {
+      fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${subLocationName}/${image}`;
     } else {
-      fullPath = `${workerBaseURL}/${location.country}/${location.region || ''}/${location.province}/${location.city}/${category}/${image}`;
+      fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${image}`;
     }
+
+    // Debugging lines
+    console.log(`Image path: ${fullPath}`);
+    console.log(`country: ${country}, region: ${region}, province: ${province}, city: ${city}, category: ${category}, subLocationName: ${subLocationName}`);
 
     const imgElement = document.createElement('img');
     imgElement.src = fullPath;
@@ -166,15 +187,37 @@ function openModal(location, parentLocation = null) {
     modalImages.appendChild(imgElement);
   });
 
+  const videos = location.videos.length > 0 ? location.videos : parentLocation ? parentLocation.videos : [];
+  videos.forEach((video, index) => {
+    if (video.includes("youtube.com/embed/")) {
+      const iframeElement = document.createElement('iframe');
+      iframeElement.src = video;
+      iframeElement.width = "560";
+      iframeElement.height = "315";
+      iframeElement.frameBorder = "0";
+      iframeElement.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+      iframeElement.allowFullscreen = true;
+      modalImages.appendChild(iframeElement);
+    } else {
+      const errorText = document.createElement('p');
+      errorText.textContent = `Video URL is not embeddable: ${video}`;
+      modalImages.appendChild(errorText);
+    }
+  });
+
   modal.style.display = 'block';
 }
 
 document.getElementById('modal-close').addEventListener('click', () => {
-  document.getElementById('locationModal').style.display = 'none';
+  const modal = document.getElementById('locationModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
 });
 
 document.addEventListener('click', event => {
-  if (event.target == document.getElementById('locationModal')) {
-      document.getElementById('locationModal').style.display = 'none';
+  const modal = document.getElementById('locationModal');
+  if (event.target === modal) {
+    modal.style.display = 'none';
   }
 });

@@ -1,15 +1,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { COUNTRY, REGION, PROVINCE, CITY, CATEGORY } from './locationsMetadata.js';
+import { COUNTRY, REGION, PROVINCE, CITY, CATEGORY, COORDINATES, VIDEO_LINKS } from './locationsMetadata';
 
 interface SubLocation {
     name: string;
     coordinates: [number, number];
     images: string[];
+    videos: string[];
     category: CATEGORY;
 }
 
 interface Location {
+    id: string;
     country: COUNTRY;
     region?: REGION;
     province: PROVINCE;
@@ -17,22 +19,25 @@ interface Location {
     coordinates: [number, number];
     categories: CATEGORY[];
     images: string[];
-    subLocations?: SubLocation[];
+    videos: string[];
+    name: string;
 }
 
 const metadata: Location[] = [];
 
 function addLocation(
+    id: string,
     country: COUNTRY,
     province: PROVINCE,
     city: CITY,
     coordinates: [number, number],
     categories: CATEGORY[],
     images: string[] = [],
-    subLocations?: SubLocation[],
+    videos: string[] = [],
+    name: string,
     region?: REGION
 ) {
-    const location: Location = { country, province, city, coordinates, categories, images, subLocations };
+    const location: Location = { id, country, province, city, coordinates, categories, images, videos, name };
     if (region) {
         location.region = region;
     }
@@ -45,51 +50,84 @@ function saveMetadata(filePath: string) {
     console.log(`Metadata saved to ${filePath}`);
 }
 
-// Adding locations
 addLocation(
-    COUNTRY.PH, 
-    PROVINCE.DAVAO_DEL_SUR, 
-    CITY.DAVAO, 
-    [7.1907, 125.4553], 
-    [CATEGORY.GENERAL, CATEGORY.BARS], 
-    [], 
-    [
-        { name: "bar_name", coordinates: [7.1917, 125.4530], images: [], category: CATEGORY.BARS },
-        { name: "Bar B", coordinates: [7.1920, 125.4560], images: [], category: CATEGORY.BARS }
-    ], 
+    'loc1',
+    COUNTRY.PH,
+    PROVINCE.DAVAO_DEL_SUR,
+    CITY.DAVAO,
+    COORDINATES[CITY.DAVAO],
+    [CATEGORY.GENERAL, CATEGORY.BARS],
+    ["davao_general_1.png", "davao_general_2.jpg", "davao_general_3.jpg", "davao_general_4.jpg"],
+    ["https://www.youtube.com/embed/example1"],
+    'Davao City Center',
     REGION.MINDANAO
 );
 
 addLocation(
-    COUNTRY.PH, 
-    PROVINCE.DAVAO_DEL_SUR, 
-    CITY.DAVAO, 
-    [7.2100, 125.4800], 
-    [CATEGORY.GENERAL, CATEGORY.BEACHES], 
-    [], 
-    [
-        { name: "Beach A", coordinates: [7.2110, 125.4810], images: [], category: CATEGORY.BEACHES },
-        { name: "Beach B", coordinates: [7.2120, 125.4850], images: [], category: CATEGORY.BEACHES },
-        { name: "general_area1", coordinates: [7.2100, 125.4800], images: [], category: CATEGORY.GENERAL }
-    ], 
+    'loc2',
+    COUNTRY.PH,
+    PROVINCE.DAVAO_DEL_SUR,
+    CITY.DAVAO,
+    [7.21, 125.48],
+    [CATEGORY.GENERAL, CATEGORY.BEACHES],
+    ["davao_beaches_1.jpg", "davao_beaches_2.png"],
+    ["https://www.youtube.com/embed/example2"],
+    'Davao Beach',
     REGION.MINDANAO
 );
 
 addLocation(
-    COUNTRY.PH, 
-    PROVINCE.DAVAO_DEL_SUR, 
-    CITY.DAVAO, 
-    [7.2300, 125.5000], 
-    [CATEGORY.GENERAL], 
-    [], 
-    [
-        { name: "general_area2", coordinates: [7.2300, 125.5000], images: [], category: CATEGORY.GENERAL }
-    ], 
+    'xx',
+    COUNTRY.PH,
+    PROVINCE.DAVAO_DEL_SUR,
+    CITY.DAVAO,
+    [7.1917, 125.453],
+    [CATEGORY.BARS],
+    [],
+    ["https://www.youtube.com/embed/MzQuNihTZOY"],
+    'bar_name',
     REGION.MINDANAO
 );
 
-addLocation(COUNTRY.PH, PROVINCE.CEBU, CITY.CEBU, [10.3157, 123.8854], [CATEGORY.BEACHES], [], [], REGION.VISAYAS);
+addLocation(
+    'subloc2',
+    COUNTRY.PH,
+    PROVINCE.DAVAO_DEL_SUR,
+    CITY.DAVAO,
+    [7.192, 125.456],
+    [CATEGORY.BARS],
+    [],
+    [],
+    'Bar B',
+    REGION.MINDANAO
+);
+
+addLocation(
+    'loc3',
+    COUNTRY.PH,
+    PROVINCE.DAVAO_DEL_SUR,
+    CITY.DAVAO,
+    [7.2300, 125.5000],
+    [CATEGORY.GENERAL],
+    ["davao_general_1.png", "davao_general_2.jpg", "davao_general_3.jpg", "davao_general_4.jpg"],
+    [],
+    'General Area 2',
+    REGION.MINDANAO
+);
+
+addLocation(
+    'loc4',
+    COUNTRY.PH,
+    PROVINCE.CEBU,
+    CITY.CEBU,
+    COORDINATES[CITY.CEBU],
+    [CATEGORY.BEACHES],
+    ["cebu_beach_1.png", "cebu_beach_2.jpg"],
+    ["https://www.youtube.com/embed/example3"],
+    'Cebu Beach',
+    REGION.VISAYAS
+);
 
 const outputFilePath = path.join(process.cwd(), 'public/js/metadata.json');
-console.log("ACCESSING: metadata.json path", outputFilePath)
+console.log("ACCESSING: metadata.json path", outputFilePath);
 saveMetadata(outputFilePath);

@@ -9,7 +9,7 @@ require('dotenv').config();
 
 const app = express();
 const port = 3000;
-const cache = new NodeCache({ stdTTL: 300 }); // Cache for 5 minutes
+const cache = new NodeCache({ stdTTL: 300 });
 
 app.use((req, res, next) => {
     console.log(`Received request for: ${req.url}`);
@@ -29,11 +29,9 @@ app.get('/data', async (req, res) => {
             return res.json(cachedData);
         }
 
-        // Fetch primary data from metadata.json
         const metadataPath = path.join(__dirname, 'public/js/metadata.json');
         const primaryData = JSON.parse(fs.readFileSync(metadataPath, 'utf8'));
 
-        // Attempt to fetch secondary data from Google Sheets
         let secondaryData = [];
         try {
             const sheetData = await getSheetData(process.env.SPREADSHEET_ID, `${process.env.SPREADSHEET_NAME}!A2:Z`);
@@ -42,7 +40,6 @@ app.get('/data', async (req, res) => {
             console.error('Failed to fetch or process data from Google Sheets:', sheetError);
         }
 
-        // Merge the data, ensuring primary data is not overwritten
         const mergedData = mergeData(primaryData, secondaryData);
         cache.set('sheetData', mergedData);
         res.json(mergedData);

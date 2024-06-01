@@ -6,7 +6,7 @@ function updateMetadataWithImages(basePath, metadata) {
     metadata.forEach(location => {
         const locationPath = path.join(basePath, location.country, location.region || '', location.province, location.city);
         if (fs.existsSync(locationPath) && fs.lstatSync(locationPath).isDirectory()) {
-            const images = [];
+            let images = [];
             const files = fs.readdirSync(locationPath);
             files.forEach(file => {
                 const filePath = path.join(locationPath, file);
@@ -14,8 +14,10 @@ function updateMetadataWithImages(basePath, metadata) {
                     images.push(file);
                 }
             });
+
             location.images = images;
 
+            // Process sublocations if any
             location.categories.forEach(category => {
                 const categoryPath = path.join(locationPath, category);
                 if (fs.existsSync(categoryPath) && fs.lstatSync(categoryPath).isDirectory()) {
@@ -23,24 +25,23 @@ function updateMetadataWithImages(basePath, metadata) {
                     categoryFiles.forEach(file => {
                         const filePath = path.join(categoryPath, file);
                         if (!fs.lstatSync(filePath).isDirectory()) {
-                            location.images.push(file);
+                            images.push(file);
                         }
                     });
 
-                    if (location.subLocations) {
-                        location.subLocations.forEach(subLocation => {
-                            const subLocationPath = path.join(categoryPath, subLocation.name);
-                            if (fs.existsSync(subLocationPath) && fs.lstatSync(subLocationPath).isDirectory()) {
-                                const subLocationFiles = fs.readdirSync(subLocationPath);
-                                subLocation.images = [];
-                                subLocationFiles.forEach(file => {
-                                    const filePath = path.join(subLocationPath, file);
-                                    if (!fs.lstatSync(filePath).isDirectory()) {
-                                        subLocation.images.push(file);
-                                    }
-                                });
-                            }
-                        });
+                    // Process subLocations
+                    if (location.name) {
+                        const subLocationPath = path.join(categoryPath, location.name.toLowerCase().replace(/ /g, '_'));
+                        if (fs.existsSync(subLocationPath) && fs.lstatSync(subLocationPath).isDirectory()) {
+                            const subLocationFiles = fs.readdirSync(subLocationPath);
+                            location.images = [];
+                            subLocationFiles.forEach(file => {
+                                const filePath = path.join(subLocationPath, file);
+                                if (!fs.lstatSync(filePath).isDirectory()) {
+                                    location.images.push(path.join(location.name.toLowerCase().replace(/ /g, '_'), file));
+                                }
+                            });
+                        }
                     }
                 } else {
                     console.log(`Category path does not exist or is not a directory: ${categoryPath}`);
