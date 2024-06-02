@@ -18,7 +18,6 @@ const categoryIcons = {
   default: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] })
 };
 
-
 fetch('/metadata.json')
   .then(response => {
     if (!response.ok) {
@@ -38,7 +37,17 @@ fetch('/metadata.json')
       })
       .then(secondaryData => {
         console.log('Google Sheets data:', JSON.stringify(secondaryData, null, 2));
-        const mergedData = primaryData.concat(secondaryData);
+        const secondaryMap = new Map(secondaryData.map(item => [
+          JSON.stringify(item.coordinates),
+          item
+        ]));
+        
+        const mergedData = primaryData.map(location => {
+          const key = JSON.stringify(location.coordinates);
+          const matchingItem = secondaryMap.get(key);
+          return matchingItem ? { ...location, ...matchingItem } : location;
+        });
+                
         allLocations = mergedData;
         populateFilters(mergedData, 'regionFilter', 'categoryFilter');
         updateMarkers(mergedData);
@@ -78,10 +87,14 @@ function processLocation(location, selectedRegion, selectedCategory) {
       const marker = L.marker(location.coordinates, { icon }).addTo(map);
       markers.push(marker);
 
+      const tooltipContent = `
+        <strong>Name:</strong> ${location.name} <br>
+        <strong>Score:</strong> ${location.score || 'N/A'}
+      `;
       const tooltip = L.tooltip({
         permanent: true,
         direction: 'top'
-      }).setContent(location.city);
+      }).setContent(tooltipContent);
       marker.bindTooltip(tooltip);
 
       marker.on('click', () => openModal(location));
@@ -93,10 +106,14 @@ function processLocation(location, selectedRegion, selectedCategory) {
           const subMarker = L.marker(subLoc.coordinates, { icon: subIcon }).addTo(map);
           markers.push(subMarker);
 
+          const subTooltipContent = `
+            ${location.city} - ${subLoc.name} <br>
+            <strong>Score:</strong> ${subLoc.score || 'N/A'}
+          `;
           const subTooltip = L.tooltip({
             permanent: true,
             direction: 'top'
-          }).setContent(`${location.city} - ${subLoc.name}`);
+          }).setContent(subTooltipContent);
           subMarker.bindTooltip(subTooltip);
 
           subMarker.on('click', () => openModal(subLoc, location));
@@ -109,16 +126,6 @@ function processLocation(location, selectedRegion, selectedCategory) {
   } else {
     console.log(`Invalid coordinates for ${location.city}`);
   }
-}
-
-
-function getCategoryFromImageName(imageName, categories) {
-  for (const category of categories) {
-    if (imageName.includes(category)) {
-      return category;
-    }
-  }
-  return 'general';
 }
 
 function updateMarkers(locations) {
