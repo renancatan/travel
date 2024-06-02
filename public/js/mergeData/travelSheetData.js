@@ -23,6 +23,7 @@ function mergeData(primaryData, secondaryData) {
             primaryItem.coordinates = primaryItem.coordinates.length ? primaryItem.coordinates : item.coordinates;
             primaryItem.prices = primaryItem.prices || item.prices;
             primaryItem.additionalInfo = primaryItem.additionalInfo || item.additionalInfo;
+            primaryItem.score = primaryItem.score || item.score;
         } else {
             console.log(`No match found for secondary item: ${JSON.stringify(item, null, 2)}`);
             primaryMap.set(key, item);

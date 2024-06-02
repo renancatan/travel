@@ -15,12 +15,13 @@ function travelSheetData(rows) {
                 coordinates: coordinates,
                 city: row[5] || 'unknown',  // 'location_name' corresponds to 'city'
                 region: null,  // No region in the new structure
-                categories: row[0] ? row[0].split(',') : [],  // 'category' corresponds to 'categories'
+                categories: row[2] ? row[2].split(',') : [],  // 'category' corresponds to 'categories'
                 country: 'unknown',  // No country in the new structure
                 province: 'unknown',  // No province in the new structure
                 images: [],  // No images in the new structure
-                prices: row[3] ? row[3].replace(',', '.') : null,  // 'amount' corresponds to 'prices'
-                additionalInfo: row[4] || null  // 'description' corresponds to 'additionalInfo'
+                prices: row[15] ? row[15].replace(',', '.') : null,  // 'amount' corresponds to 'prices'
+                additionalInfo: row[4] || null,  // 'description' corresponds to 'additionalInfo'
+                score: row[13] || null
             };
         });
         return data;
