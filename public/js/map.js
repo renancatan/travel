@@ -70,25 +70,28 @@ function removeMarkers() {
   markers = [];
 }
 
-function processLocation(location, selectedRegion, selectedCategory, selectedPrice, selectedScore) {
+function processLocation(location, selectedRegion, selectedCategory, selectedPrice, selectedScores) {
   console.log(`Processing location: ${location.city}, region: ${location.region}, categories: ${location.categories}`);
   console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}`);
-  
+
   if (location.coordinates && location.coordinates.length === 2) {
     const regionMatches = selectedRegion === 'all' || location.region === selectedRegion;
     const categoryMatches = selectedCategory === 'all' || location.categories.includes(selectedCategory);
-    const priceMatches = selectedPrice === 'all' || parseFloat(location.prices) <= selectedPrice;
-    let scoreMatches = true;
+    const priceMatches = selectedPrice === 'all' || !location.prices || parseFloat(location.prices) <= selectedPrice;
 
-    if (selectedScore !== 'all') {
+    let scoreMatches = true;
+    if (selectedScores.length > 0) {
       const score = parseFloat(location.score);
-      if (selectedScore === '1-2') {
-        scoreMatches = score >= 1 && score <= 2;
-      } else if (selectedScore === '3') {
-        scoreMatches = score === 3;
-      } else if (selectedScore === '4-5') {
-        scoreMatches = score >= 4 && score <= 5;
-      }
+      scoreMatches = selectedScores.some(range => {
+        if (range === '1-2') {
+          return score >= 1 && score <= 2;
+        } else if (range === '3') {
+          return score === 3;
+        } else if (range === '4-5') {
+          return score >= 4 && score <= 5;
+        }
+        return false;
+      });
     }
 
     if (regionMatches && categoryMatches && priceMatches && scoreMatches) {
@@ -147,11 +150,11 @@ function updateMarkers(locations) {
   const selectedRegion = document.getElementById('regionFilter').value;
   const selectedCategory = document.getElementById('categoryFilter').value;
   const selectedPrice = document.getElementById('priceFilter').value;
-  const selectedScore = document.getElementById('scoreFilter').value;
+  const selectedScores = Array.from(document.querySelectorAll('#scoreFilter input:checked')).map(input => input.value);
 
-  console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}, selected price: ${selectedPrice}, selected score: ${selectedScore}`);
+  console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}, selected price: ${selectedPrice}, selected scores: ${selectedScores}`);
   
-  locations.forEach(location => processLocation(location, selectedRegion, selectedCategory, selectedPrice, selectedScore));
+  locations.forEach(location => processLocation(location, selectedRegion, selectedCategory, selectedPrice, selectedScores));
 }
 
 document.getElementById('regionFilter').addEventListener('change', () => {
@@ -167,7 +170,16 @@ document.getElementById('priceFilter').addEventListener('input', () => {
   updateMarkers(allLocations);
 });
 
-document.getElementById('scoreFilter').addEventListener('change', () => {
+document.querySelectorAll('#scoreFilter input').forEach(input => {
+  input.addEventListener('change', () => {
+    updateMarkers(allLocations);
+  });
+});
+
+document.getElementById('clearScore').addEventListener('click', () => {
+  document.querySelectorAll('#scoreFilter input').forEach(input => {
+    input.checked = false;
+  });
   updateMarkers(allLocations);
 });
 

@@ -7,13 +7,11 @@ export function populateFilters(locations, regionFilterId, categoryFilterId, pri
     const regions = new Set();
     const categories = new Set();
     const prices = new Set();
-    const scores = new Set();
   
     locations.forEach(location => {
       if (location.region) regions.add(location.region);
       location.categories.forEach(category => categories.add(category));
       if (location.prices) prices.add(parseFloat(location.prices));
-      if (location.score) scores.add(parseFloat(location.score));
     });
   
     regions.forEach(region => {
@@ -30,21 +28,14 @@ export function populateFilters(locations, regionFilterId, categoryFilterId, pri
       categoryFilter.appendChild(option);
     });
   
-    const maxPrice = Math.max(...prices);
+    const maxPrice = Math.max(...prices) + 1;
     priceFilter.max = maxPrice;
     priceFilter.min = 0;
     priceFilter.step = 1;
     priceFilter.value = maxPrice;
-  
-    ['1-2', '3', '4-5'].forEach(scoreRange => {
-      const option = document.createElement('option');
-      option.value = scoreRange;
-      option.text = scoreRange;
-      scoreFilter.appendChild(option);
-    });
+    document.getElementById('priceOutput').value = maxPrice;
   
     console.log('Filters populated with regions:', Array.from(regions));
     console.log('Filters populated with categories:', Array.from(categories));
     console.log('Filters populated with price range:', 0, maxPrice);
-    console.log('Filters populated with score ranges:', ['1-2', '3', '4-5']);
 }
