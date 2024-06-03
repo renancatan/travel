@@ -18,6 +18,18 @@
         <select id="categoryFilter">
             <option value="all">All</option>
         </select>
+
+        <label for="priceFilter">Price Range[BRL]:</label>
+        <input type="range" id="priceFilter" min="0" max="20000" step="1">
+        <output id="priceOutput"></output>
+
+        <br><br>
+        <div id="scoreFilter">Score:
+            <label><input type="checkbox" value="1-2"> 1-2</label>
+            <label><input type="checkbox" value="3"> 3</label>
+            <label><input type="checkbox" value="4-5"> 4-5</label>
+        </div>
+        <button id="clearScore">Clear Score</button>
     </div>
     <div id="map" style="height: 600px;"></div>
     <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>

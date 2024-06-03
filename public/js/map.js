@@ -1,4 +1,4 @@
-import { populateFilters, filterMarkers } from './filters/filters.js';
+import { populateFilters } from './filters/filters.js';
 
 const map = L.map('map').setView([0, 0], 2);
 
@@ -14,10 +14,10 @@ const categoryIcons = {
   bars: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/bar.png`, iconSize: [40, 40] }),
   beaches: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/beach.png`, iconSize: [50, 50] }),
   caves: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/cave.png`, iconSize: [50, 50] }),
+  boat: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/boat.png`, iconSize: [50, 50] }),
   general: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] }),
   default: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] })
 };
-
 
 fetch('/metadata.json')
   .then(response => {
@@ -38,15 +38,25 @@ fetch('/metadata.json')
       })
       .then(secondaryData => {
         console.log('Google Sheets data:', JSON.stringify(secondaryData, null, 2));
-        const mergedData = primaryData.concat(secondaryData);
+        const secondaryMap = new Map(secondaryData.map(item => [
+          JSON.stringify(item.coordinates),
+          item
+        ]));
+        
+        const mergedData = primaryData.map(location => {
+          const key = JSON.stringify(location.coordinates);
+          const matchingItem = secondaryMap.get(key);
+          return matchingItem ? { ...location, ...matchingItem } : location;
+        });
+                
         allLocations = mergedData;
-        populateFilters(mergedData, 'regionFilter', 'categoryFilter');
+        populateFilters(mergedData, 'regionFilter', 'categoryFilter', 'priceFilter', 'scoreFilter');
         updateMarkers(mergedData);
       })
       .catch(error => {
         console.error('Failed to fetch data:', error);
         allLocations = primaryData;
-        populateFilters(primaryData, 'regionFilter', 'categoryFilter');
+        populateFilters(primaryData, 'regionFilter', 'categoryFilter', 'priceFilter', 'scoreFilter');
         updateMarkers(primaryData);
       });
   })
@@ -61,15 +71,31 @@ function removeMarkers() {
   markers = [];
 }
 
-function processLocation(location, selectedRegion, selectedCategory) {
+function processLocation(location, selectedRegion, selectedCategory, selectedPrice, selectedScores) {
   console.log(`Processing location: ${location.city}, region: ${location.region}, categories: ${location.categories}`);
   console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}`);
-  
+
   if (location.coordinates && location.coordinates.length === 2) {
     const regionMatches = selectedRegion === 'all' || location.region === selectedRegion;
     const categoryMatches = selectedCategory === 'all' || location.categories.includes(selectedCategory);
+    const priceMatches = selectedPrice === 'all' || !location.prices || parseFloat(location.prices) <= selectedPrice;
 
-    if (regionMatches && categoryMatches) {
+    let scoreMatches = true;
+    if (selectedScores.length > 0) {
+      const score = parseFloat(location.score);
+      scoreMatches = selectedScores.some(range => {
+        if (range === '1-2') {
+          return score >= 1 && score <= 2;
+        } else if (range === '3') {
+          return score === 3;
+        } else if (range === '4-5') {
+          return score >= 4 && score <= 5;
+        }
+        return false;
+      });
+    }
+
+    if (regionMatches && categoryMatches && priceMatches && scoreMatches) {
       console.log(`Adding marker for location: ${location.city}`);
       
       const category = location.categories.length > 0 ? location.categories[0] : 'general';
@@ -78,10 +104,14 @@ function processLocation(location, selectedRegion, selectedCategory) {
       const marker = L.marker(location.coordinates, { icon }).addTo(map);
       markers.push(marker);
 
+      const tooltipContent = `
+        <strong>Name:</strong> ${location.name} <br>
+        <strong>Score:</strong> ${location.score || 'N/A'}
+      `;
       const tooltip = L.tooltip({
         permanent: true,
         direction: 'top'
-      }).setContent(location.city);
+      }).setContent(tooltipContent);
       marker.bindTooltip(tooltip);
 
       marker.on('click', () => openModal(location));
@@ -93,10 +123,14 @@ function processLocation(location, selectedRegion, selectedCategory) {
           const subMarker = L.marker(subLoc.coordinates, { icon: subIcon }).addTo(map);
           markers.push(subMarker);
 
+          const subTooltipContent = `
+            ${location.city} - ${subLoc.name} <br>
+            <strong>Score:</strong> ${subLoc.score || 'N/A'}
+          `;
           const subTooltip = L.tooltip({
             permanent: true,
             direction: 'top'
-          }).setContent(`${location.city} - ${subLoc.name}`);
+          }).setContent(subTooltipContent);
           subMarker.bindTooltip(subTooltip);
 
           subMarker.on('click', () => openModal(subLoc, location));
@@ -111,25 +145,17 @@ function processLocation(location, selectedRegion, selectedCategory) {
   }
 }
 
-
-function getCategoryFromImageName(imageName, categories) {
-  for (const category of categories) {
-    if (imageName.includes(category)) {
-      return category;
-    }
-  }
-  return 'general';
-}
-
 function updateMarkers(locations) {
   console.log('Updating markers...');
   removeMarkers();
   const selectedRegion = document.getElementById('regionFilter').value;
   const selectedCategory = document.getElementById('categoryFilter').value;
+  const selectedPrice = document.getElementById('priceFilter').value;
+  const selectedScores = Array.from(document.querySelectorAll('#scoreFilter input:checked')).map(input => input.value);
 
-  console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}`);
+  console.log(`Selected region: ${selectedRegion}, selected category: ${selectedCategory}, selected price: ${selectedPrice}, selected scores: ${selectedScores}`);
   
-  locations.forEach(location => processLocation(location, selectedRegion, selectedCategory));
+  locations.forEach(location => processLocation(location, selectedRegion, selectedCategory, selectedPrice, selectedScores));
 }
 
 document.getElementById('regionFilter').addEventListener('change', () => {
@@ -137,6 +163,24 @@ document.getElementById('regionFilter').addEventListener('change', () => {
 });
 
 document.getElementById('categoryFilter').addEventListener('change', () => {
+  updateMarkers(allLocations);
+});
+
+document.getElementById('priceFilter').addEventListener('input', () => {
+  document.getElementById('priceOutput').value = document.getElementById('priceFilter').value;
+  updateMarkers(allLocations);
+});
+
+document.querySelectorAll('#scoreFilter input').forEach(input => {
+  input.addEventListener('change', () => {
+    updateMarkers(allLocations);
+  });
+});
+
+document.getElementById('clearScore').addEventListener('click', () => {
+  document.querySelectorAll('#scoreFilter input').forEach(input => {
+    input.checked = false;
+  });
   updateMarkers(allLocations);
 });
 
@@ -152,11 +196,23 @@ function openModal(location, parentLocation = null) {
   }
 
   const title = parentLocation ? `${parentLocation.city} - ${location.name}` : location.city;
-  const bodyText = `Price: ${location.prices || parentLocation?.prices || 'N/A'} ${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}`;
+  const bodyText = `
+    <table>
+      <tr>
+        <td><strong>Name:</strong></td>
+        <td>${location.name}</td>
+      </tr>
+      <tr>
+        <td><strong>Score:</strong></td>
+        <td>${location.score || parentLocation?.score || 'N/A'}</td>
+      </tr>
+    </table>
+    Price: ${location.prices || parentLocation?.prices || 'N/A'} ${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}
+  `;
   const images = location.images.length > 0 ? location.images : parentLocation ? parentLocation.images : [];
 
   modalTitle.textContent = title;
-  modalBody.textContent = bodyText;
+  modalBody.innerHTML = bodyText;
   modalImages.innerHTML = '';
 
   images.forEach((image, index) => {
@@ -164,7 +220,7 @@ function openModal(location, parentLocation = null) {
 
     let fullPath;
     const category = location.categories.length > 0 ? location.categories[0] : (parentLocation ? parentLocation.categories[0] : 'general');
-    
+
     const country = location.country || parentLocation?.country || 'unknown';
     const region = location.region || parentLocation?.region || '';
     const province = location.province || parentLocation?.province || 'unknown';
@@ -172,14 +228,10 @@ function openModal(location, parentLocation = null) {
     const subLocationName = location.isSublocation ? location.name.toLowerCase().replace(/ /g, '_') : '';
 
     if (location.isSublocation) {
-      fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${subLocationName}/${image}`;
+      fullPath = `${workerBaseURL}/${country}/${region ? region + '/' : ''}${province}/${city}/${category}/${subLocationName}/${image}`;
     } else {
-      fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${image}`;
+      fullPath = `${workerBaseURL}/${country}/${region ? region + '/' : ''}${province}/${city}/${category}/${image}`;
     }
-
-    // Debugging lines
-    console.log(`Image path: ${fullPath}`);
-    console.log(`country: ${country}, region: ${region}, province: ${province}, city: ${city}, category: ${category}, subLocationName: ${subLocationName}`);
 
     const imgElement = document.createElement('img');
     imgElement.src = fullPath;

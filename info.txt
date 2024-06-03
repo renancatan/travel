@@ -25,3 +25,15 @@ insert your r2 token
 
 Finally, after setting the worker.js file, you can deploy it, so run:
 npx wrangler deploy
+
+Be sure to have your creds/tokens protected somewhere like a .env file
+
+--STEPS TO MAKE THE APP WORK
+
+1 - Create Lat/Long at the app(appsheet) level AND add transactions for that place
+2 - Drag the images to the right folder
+3 - Upload videos to youtube and add its path inside the desirable place of generateMetadata.ts
+4 - Create the function with the necessary setting at generateMetadata.ts, remembering to pass/add the right category
+5 - run the command: make runAll -> Also Check if metadata.json was generated successfully
+6 - Upload to cloudflare(using worker path) - r2/s3 etc
+7 - Test the application, check names, paths, etc

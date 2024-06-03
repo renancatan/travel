@@ -17,10 +17,12 @@ const s3 = new AWS.S3({
   signatureVersion: 'v4',
 });
 
-const place = "ph/mindanao/davao_del_sur/davao/"
-const specificRegion = "bars/bar_name/"
+// const place = "ph/mindanao/davao_del_sur/davao/"
+// const specificRegion = "bars/bar_name/"
+const place = "br/sp/eldorado"
+const specificRegion = "/caves/caverna_diabo/"
 const general = "general/"
-const remotePrefix = `${place}${general}`;
+const remotePrefix = `${place}${specificRegion}`;
 const localImageDir = path.join(__dirname, `../../uploads/${remotePrefix}`);
 
 fs.readdir(localImageDir, (err, files) => {
