@@ -14,6 +14,7 @@ const categoryIcons = {
   bars: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/bar.png`, iconSize: [40, 40] }),
   beaches: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/beach.png`, iconSize: [50, 50] }),
   caves: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/cave.png`, iconSize: [50, 50] }),
+  boat: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/boat.png`, iconSize: [50, 50] }),
   general: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] }),
   default: L.icon({ iconUrl: `${workerBaseURL}/utils/icons/default.png`, iconSize: [40, 40] })
 };
@@ -190,23 +191,23 @@ function openModal(location, parentLocation = null) {
   const modalImages = document.getElementById('modal-images');
 
   if (!modal || !modalTitle || !modalBody || !modalImages) {
-      console.error('One or more modal elements are missing.');
-      return;
+    console.error('One or more modal elements are missing.');
+    return;
   }
 
   const title = parentLocation ? `${parentLocation.city} - ${location.name}` : location.city;
   const bodyText = `
-      <table>
-          <tr>
-              <td><strong>Name:</strong></td>
-              <td>${location.name}</td>
-          </tr>
-          <tr>
-              <td><strong>Score:</strong></td>
-              <td>${location.score || parentLocation?.score || 'N/A'}</td>
-          </tr>
-      </table>
-      Price: ${location.prices || parentLocation?.prices || 'N/A'} ${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}
+    <table>
+      <tr>
+        <td><strong>Name:</strong></td>
+        <td>${location.name}</td>
+      </tr>
+      <tr>
+        <td><strong>Score:</strong></td>
+        <td>${location.score || parentLocation?.score || 'N/A'}</td>
+      </tr>
+    </table>
+    Price: ${location.prices || parentLocation?.prices || 'N/A'} ${location.additionalInfo || parentLocation?.additionalInfo || 'N/A'}
   `;
   const images = location.images.length > 0 ? location.images : parentLocation ? parentLocation.images : [];
 
@@ -215,45 +216,45 @@ function openModal(location, parentLocation = null) {
   modalImages.innerHTML = '';
 
   images.forEach((image, index) => {
-      if (!/^(jpg|jpeg|png|gif)$/.test(image.split('.').pop())) return;
+    if (!/^(jpg|jpeg|png|gif)$/.test(image.split('.').pop())) return;
 
-      let fullPath;
-      const category = location.categories.length > 0 ? location.categories[0] : (parentLocation ? parentLocation.categories[0] : 'general');
+    let fullPath;
+    const category = location.categories.length > 0 ? location.categories[0] : (parentLocation ? parentLocation.categories[0] : 'general');
 
-      const country = location.country || parentLocation?.country || 'unknown';
-      const region = location.region || parentLocation?.region || '';
-      const province = location.province || parentLocation?.province || 'unknown';
-      const city = location.city || parentLocation?.city || 'unknown';
-      const subLocationName = location.isSublocation ? location.name.toLowerCase().replace(/ /g, '_') : '';
+    const country = location.country || parentLocation?.country || 'unknown';
+    const region = location.region || parentLocation?.region || '';
+    const province = location.province || parentLocation?.province || 'unknown';
+    const city = location.city || parentLocation?.city || 'unknown';
+    const subLocationName = location.isSublocation ? location.name.toLowerCase().replace(/ /g, '_') : '';
 
-      if (location.isSublocation) {
-          fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${subLocationName}/${image}`;
-      } else {
-          fullPath = `${workerBaseURL}/${country}/${region}/${province}/${city}/${category}/${image}`;
-      }
+    if (location.isSublocation) {
+      fullPath = `${workerBaseURL}/${country}/${region ? region + '/' : ''}${province}/${city}/${category}/${subLocationName}/${image}`;
+    } else {
+      fullPath = `${workerBaseURL}/${country}/${region ? region + '/' : ''}${province}/${city}/${category}/${image}`;
+    }
 
-      const imgElement = document.createElement('img');
-      imgElement.src = fullPath;
-      imgElement.alt = `Image ${index + 1}`;
-      modalImages.appendChild(imgElement);
+    const imgElement = document.createElement('img');
+    imgElement.src = fullPath;
+    imgElement.alt = `Image ${index + 1}`;
+    modalImages.appendChild(imgElement);
   });
 
   const videos = location.videos.length > 0 ? location.videos : parentLocation ? parentLocation.videos : [];
   videos.forEach((video, index) => {
-      if (video.includes("youtube.com/embed/")) {
-          const iframeElement = document.createElement('iframe');
-          iframeElement.src = video;
-          iframeElement.width = "560";
-          iframeElement.height = "315";
-          iframeElement.frameBorder = "0";
-          iframeElement.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
-          iframeElement.allowFullscreen = true;
-          modalImages.appendChild(iframeElement);
-      } else {
-          const errorText = document.createElement('p');
-          errorText.textContent = `Video URL is not embeddable: ${video}`;
-          modalImages.appendChild(errorText);
-      }
+    if (video.includes("youtube.com/embed/")) {
+      const iframeElement = document.createElement('iframe');
+      iframeElement.src = video;
+      iframeElement.width = "560";
+      iframeElement.height = "315";
+      iframeElement.frameBorder = "0";
+      iframeElement.allow = "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture";
+      iframeElement.allowFullscreen = true;
+      modalImages.appendChild(iframeElement);
+    } else {
+      const errorText = document.createElement('p');
+      errorText.textContent = `Video URL is not embeddable: ${video}`;
+      modalImages.appendChild(errorText);
+    }
   });
 
   modal.style.display = 'block';
