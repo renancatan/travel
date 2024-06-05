@@ -17,7 +17,6 @@ function updateMetadataWithImages(basePath, metadata) {
 
             location.images = images;
 
-            // Process sublocations if any
             location.categories.forEach(category => {
                 const categoryPath = path.join(locationPath, category);
                 if (fs.existsSync(categoryPath) && fs.lstatSync(categoryPath).isDirectory()) {
@@ -29,7 +28,6 @@ function updateMetadataWithImages(basePath, metadata) {
                         }
                     });
 
-                    // Process subLocations
                     if (location.name) {
                         const subLocationPath = path.join(categoryPath, location.name.toLowerCase().replace(/ /g, '_'));
                         if (fs.existsSync(subLocationPath) && fs.lstatSync(subLocationPath).isDirectory()) {

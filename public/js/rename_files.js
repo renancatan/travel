@@ -22,7 +22,6 @@ function renameFiles(basePath, metadata) {
                     console.log(`Found category directory: ${categoryPath}`);
                     renameFilesInDirectory(categoryPath, location.city, category);
 
-                    // Check and rename files in sub-locations
                     if (location.name) {
                         const subLocPath = path.join(categoryPath, location.name.toLowerCase().replace(/ /g, '_'));
                         console.log(`Processing sub-location: ${location.name} at path: ${subLocPath}`);

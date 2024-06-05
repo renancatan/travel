@@ -17,8 +17,6 @@ const s3 = new AWS.S3({
   signatureVersion: 'v4',
 });
 
-// const place = "ph/mindanao/davao_del_sur/davao/"
-// const specificRegion = "bars/bar_name/"
 const place = "br/sp/eldorado"
 const specificRegion = "/caves/caverna_diabo/"
 const general = "general/"

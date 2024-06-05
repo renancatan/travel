@@ -30,7 +30,6 @@ function mergeData(primaryData, secondaryData) {
         }
     });
 
-    // Filter out any invalid images
     primaryMap.forEach(item => {
         item.images = item.images.filter(image => /\.(jpg|jpeg|png|gif)$/.test(image));
     });

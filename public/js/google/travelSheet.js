@@ -5,7 +5,7 @@ function travelSheetData(rows) {
             if (row[16] && row[17]) {
                 const lat = parseFloat(row[16].replace(',', '.').replace("'", ""));
                 const lon = parseFloat(row[17].replace(',', '.').replace("'", ""));
-                console.log(lat, lon);  // Log coordinates for debugging
+                console.log(lat, lon);
                 if (!isNaN(lat) && !isNaN(lon)) {
                     coordinates = [lat, lon];
                 }
@@ -13,14 +13,14 @@ function travelSheetData(rows) {
 
             return {
                 coordinates: coordinates,
-                city: row[5] || 'unknown',  // 'location_name' corresponds to 'city'
-                region: null,  // No region in the new structure
-                categories: row[2] ? row[2].split(',') : [],  // 'category' corresponds to 'categories'
-                country: 'unknown',  // No country in the new structure
-                province: 'unknown',  // No province in the new structure
-                images: [],  // No images in the new structure
-                prices: row[15] ? row[15].replace(',', '.') : null,  // 'amount' corresponds to 'prices'
-                additionalInfo: row[4] || null,  // 'description' corresponds to 'additionalInfo'
+                city: row[5] || 'unknown',
+                region: null,
+                categories: row[2] ? row[2].split(',') : [],
+                country: 'unknown',
+                province: 'unknown',
+                images: [],
+                prices: row[15] ? row[15].replace(',', '.') : null,
+                additionalInfo: row[6] || null,
                 score: row[13] || null
             };
         });

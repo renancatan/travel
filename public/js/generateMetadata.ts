@@ -150,8 +150,3 @@ addLocation(
 const outputFilePath = path.join(process.cwd(), 'public/js/metadata.json');
 console.log("ACCESSING: metadata.json path", outputFilePath);
 saveMetadata(outputFilePath);
-
-
-// Verify why coordinates like iporanga are being lost when carried to json file
-// upload the other videos for petar and devils cave
-// more than one category is bugging the path created here (not in r2) it adds more categories to the path, eg: boat;caves for the same location
