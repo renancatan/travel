@@ -170,7 +170,7 @@ wrangler.toml
 # ts script will always generate a .js file
 public/js/generateMetadata.js
 public/js/locationsMetadata.js
-
+public/js/config.js
 
 # prototype
 /prototype
