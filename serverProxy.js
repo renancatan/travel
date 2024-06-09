@@ -1,7 +1,6 @@
 const express = require('express');
 const path = require('path');
 const NodeCache = require('node-cache');
-const fetch = require('node-fetch');
 const getSheetData = require('./public/js/google/services/sheetsService.js');
 const travelSheetData = require('./public/js/google/travelSheet.js');
 const mergeData = require('./public/js/mergeData/travelSheetData.js');
