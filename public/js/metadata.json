@@ -1,0 +1,285 @@
+[
+  {
+    "id": "loc1",
+    "country": "ph",
+    "province": "davao_del_sur",
+    "city": "davao",
+    "coordinates": [
+      7.1907,
+      125.4553
+    ],
+    "categories": [
+      "general",
+      "bars"
+    ],
+    "images": [
+      "davao_general_1.png",
+      "davao_general_2.jpg",
+      "davao_general_3.jpg",
+      "davao_general_4.jpg"
+    ],
+    "videos": [
+      "https://www.youtube.com/embed/example1"
+    ],
+    "name": "Davao City Center",
+    "region": "mindanao"
+  },
+  {
+    "id": "SEBUI NATURAL RESERVE - BOAT TRAVEL",
+    "country": "br",
+    "province": "pr",
+    "city": "guaraquecaba",
+    "coordinates": [
+      -25.2881,
+      -48.2249
+    ],
+    "categories": [
+      "boat"
+    ],
+    "images": [
+      "reserve_sebui/guaraquecaba_boat_reserve_sebui_1.jpg",
+      "reserve_sebui/guaraquecaba_boat_reserve_sebui_2.jpg",
+      "reserve_sebui/guaraquecaba_boat_reserve_sebui_3.jpg",
+      "reserve_sebui/guaraquecaba_boat_reserve_sebui_4.jpg",
+      "reserve_sebui/guaraquecaba_boat_reserve_sebui_5.jpg",
+      "reserve_sebui/guaraquecaba_boat_reserve_sebui_6.jpg",
+      "reserve_sebui/guaraquecaba_boat_reserve_sebui_7.jpg"
+    ],
+    "videos": [
+      "https://www.youtube.com/embed/u6Uhz8JNkhc",
+      "https://www.youtube.com/embed/OULfXMA5IFo",
+      "https://www.youtube.com/embed/gBOwOa5T3gA"
+    ],
+    "name": "reserve_sebui",
+    "region": "paranagua_bay"
+  },
+  {
+    "id": "BOAT TRAVEL - 01",
+    "country": "br",
+    "province": "pr",
+    "city": "guaraquecaba",
+    "coordinates": [
+      -25.2996,
+      -48.3444
+    ],
+    "categories": [
+      "boat"
+    ],
+    "images": [
+      "boat1/guaraquecaba_boat_boat1_1.jpg",
+      "boat1/guaraquecaba_boat_boat1_4.jpg",
+      "boat1/guaraquecaba_boat_boat1_5.jpg",
+      "boat1/guaraquecaba_boat_boat1_6.jpg",
+      "boat1/guaraquecaba_boat_boat1_7.jpeg",
+      "boat1/guaraquecaba_boat_boat1_8.jpeg"
+    ],
+    "videos": [
+      "https://www.youtube.com/embed/5k_7diqrclc",
+      "https://www.youtube.com/embed/D5OqMWPr-6I",
+      "https://www.youtube.com/embed/mOjRHqZJ8oc",
+      "https://www.youtube.com/embed/2mF8YHLEjXY",
+      "https://www.youtube.com/embed/GX2o87QDHMk",
+      "https://www.youtube.com/embed/Qn6vVugfGdA",
+      "https://www.youtube.com/embed/-feLkORk1b8",
+      "https://www.youtube.com/embed/8E7lIvch5hM"
+    ],
+    "name": "boat1",
+    "region": "paranagua_bay"
+  },
+  {
+    "id": "xx",
+    "country": "ph",
+    "province": "davao_del_sur",
+    "city": "davao",
+    "coordinates": [
+      7.1917,
+      125.453
+    ],
+    "categories": [
+      "bars"
+    ],
+    "images": [
+      "bar_name/davao_bars_bar_name_1.png"
+    ],
+    "videos": [
+      "https://www.youtube.com/embed/MzQuNihTZOY"
+    ],
+    "name": "bar_name",
+    "region": "mindanao"
+  },
+  {
+    "id": "subloc2",
+    "country": "ph",
+    "province": "davao_del_sur",
+    "city": "davao",
+    "coordinates": [
+      7.192,
+      125.456
+    ],
+    "categories": [
+      "bars"
+    ],
+    "images": [],
+    "videos": [],
+    "name": "Bar B",
+    "region": "mindanao"
+  },
+  {
+    "id": "DEVIL CAVE",
+    "country": "br",
+    "province": "sp",
+    "city": "eldorado",
+    "coordinates": [
+      -24.6353,
+      -48.4029
+    ],
+    "categories": [
+      "caves"
+    ],
+    "images": [
+      "caverna_diabo/eldorado_caves_caverna_diabo_1.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_10.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_11.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_12.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_13.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_14.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_15.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_16.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_17.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_18.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_19.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_2.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_20.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_21.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_22.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_23.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_24.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_25.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_26.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_27.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_28.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_29.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_3.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_30.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_31.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_32.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_33.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_34.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_35.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_36.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_37.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_38.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_39.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_4.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_40.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_41.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_42.jpeg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_43.jpeg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_44.jpeg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_45.jpeg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_46.jpeg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_47.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_48.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_49.jpeg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_5.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_50.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_51.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_52.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_53.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_54.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_55.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_6.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_7.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_8.jpg",
+      "caverna_diabo/eldorado_caves_caverna_diabo_9.jpg"
+    ],
+    "videos": [
+      "https://www.youtube.com/embed/8OF32kbAFK0",
+      "https://www.youtube.com/embed/JinYXmNVUdQ",
+      "https://www.youtube.com/embed/TPLQ2bT9Exs",
+      "https://www.youtube.com/embed/bW-VGz-wVl8",
+      "https://www.youtube.com/embed/VQiI1aOkzac",
+      "https://www.youtube.com/embed/4Fxj5zAH6tY",
+      "https://www.youtube.com/embed/oPTTFTpD6WM",
+      "https://www.youtube.com/embed/ljkEgGai__8",
+      "https://www.youtube.com/embed/1VMZokc3NPM"
+    ],
+    "name": "caverna_diabo"
+  },
+  {
+    "id": "PETAR",
+    "country": "br",
+    "province": "sp",
+    "city": "iporanga",
+    "coordinates": [
+      -24.535,
+      -48.7046
+    ],
+    "categories": [
+      "caves"
+    ],
+    "images": [
+      "petar_caves/iporanga_caves_petar_caves_1.jpg",
+      "petar_caves/iporanga_caves_petar_caves_10.jpg",
+      "petar_caves/iporanga_caves_petar_caves_11.jpg",
+      "petar_caves/iporanga_caves_petar_caves_12.jpg",
+      "petar_caves/iporanga_caves_petar_caves_13.jpg",
+      "petar_caves/iporanga_caves_petar_caves_14.jpg",
+      "petar_caves/iporanga_caves_petar_caves_15.jpg",
+      "petar_caves/iporanga_caves_petar_caves_16.jpg",
+      "petar_caves/iporanga_caves_petar_caves_17.jpg",
+      "petar_caves/iporanga_caves_petar_caves_18.jpg",
+      "petar_caves/iporanga_caves_petar_caves_19.jpg",
+      "petar_caves/iporanga_caves_petar_caves_2.jpg",
+      "petar_caves/iporanga_caves_petar_caves_20.jpg",
+      "petar_caves/iporanga_caves_petar_caves_21.jpg",
+      "petar_caves/iporanga_caves_petar_caves_22.jpg",
+      "petar_caves/iporanga_caves_petar_caves_23.jpg",
+      "petar_caves/iporanga_caves_petar_caves_24.jpg",
+      "petar_caves/iporanga_caves_petar_caves_25.jpg",
+      "petar_caves/iporanga_caves_petar_caves_26.jpg",
+      "petar_caves/iporanga_caves_petar_caves_27.jpg",
+      "petar_caves/iporanga_caves_petar_caves_28.jpg",
+      "petar_caves/iporanga_caves_petar_caves_29.jpg",
+      "petar_caves/iporanga_caves_petar_caves_3.jpg",
+      "petar_caves/iporanga_caves_petar_caves_30.jpg",
+      "petar_caves/iporanga_caves_petar_caves_31.jpg",
+      "petar_caves/iporanga_caves_petar_caves_32.jpg",
+      "petar_caves/iporanga_caves_petar_caves_33.jpg",
+      "petar_caves/iporanga_caves_petar_caves_34.jpg",
+      "petar_caves/iporanga_caves_petar_caves_35.jpg",
+      "petar_caves/iporanga_caves_petar_caves_36.jpg",
+      "petar_caves/iporanga_caves_petar_caves_37.jpg",
+      "petar_caves/iporanga_caves_petar_caves_38.jpg",
+      "petar_caves/iporanga_caves_petar_caves_39.jpg",
+      "petar_caves/iporanga_caves_petar_caves_4.jpg",
+      "petar_caves/iporanga_caves_petar_caves_5.jpg",
+      "petar_caves/iporanga_caves_petar_caves_6.jpg",
+      "petar_caves/iporanga_caves_petar_caves_7.jpg",
+      "petar_caves/iporanga_caves_petar_caves_8.jpg",
+      "petar_caves/iporanga_caves_petar_caves_9.jpg"
+    ],
+    "videos": [],
+    "name": "petar_caves",
+    "region": "petar"
+  },
+  {
+    "id": "loc4",
+    "country": "ph",
+    "province": "cebu",
+    "city": "cebu",
+    "coordinates": [
+      10.3157,
+      123.8854
+    ],
+    "categories": [
+      "beaches"
+    ],
+    "images": [],
+    "videos": [
+      "https://www.youtube.com/embed/example3"
+    ],
+    "name": "Cebu Beach",
+    "region": "visayas"
+  }
+]
