@@ -31,7 +31,7 @@ fetch('/metadata.json')
   .then(primaryData => {
     console.log('Frontend: Primary data:', JSON.stringify(primaryData, null, 2));
 
-    fetch(apiUrl)  // '/data' // apiUrl
+    fetch(apiUrl)  // '/data' -> use locally to save json file // apiUrl (production only)
       .then(response => {
         if (!response.ok) {
           throw new Error('Network response was not ok ' + response.statusText);

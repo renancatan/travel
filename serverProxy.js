@@ -30,7 +30,9 @@ app.get('/data', async (req, res) => {
     try {
         const cachedData = cache.get('sheetData');
         if (cachedData) {
-            console.log('Server: Returning cached data');
+            // needs '/data' in map.js and accessing localhost... /data
+            console.log("Saved json file")
+            fs.writeFileSync('data.json', JSON.stringify(cachedData, null, 2));
             return res.json(cachedData);
         }
 
