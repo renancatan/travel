@@ -1,6 +1,14 @@
 {
+  "name": "travel",
+  "version": "1.0.0",
+  "description": "Travel project",
+  "scripts": {
+    "build": "echo 'No build step required'",
+    "deploy": "gh-pages -d public"
+  },
   "devDependencies": {
-    "wrangler": "^3.57.0"
+    "wrangler": "^3.57.0",
+    "gh-pages": "^3.2.3"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.577.0",
