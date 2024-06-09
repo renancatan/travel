@@ -7,6 +7,8 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
 }).addTo(map);
 
 const workerBaseURL = 'https://worker-cloudflare.renancatan4.workers.dev';
+const apiUrl = 'https://worker-travel-data.renancatan4.workers.dev/data';
+// const apiUrl = 'http://localhost:3000/data'; // Local testing
 let allLocations = [];
 let markers = [];
 
@@ -27,9 +29,9 @@ fetch('/metadata.json')
     return response.json();
   })
   .then(primaryData => {
-    console.log('Primary data:', JSON.stringify(primaryData, null, 2));
+    console.log('Frontend: Primary data:', JSON.stringify(primaryData, null, 2));
 
-    fetch('/data')
+    fetch(apiUrl)  // '/data' -> use locally to save json file // apiUrl (production only)
       .then(response => {
         if (!response.ok) {
           throw new Error('Network response was not ok ' + response.statusText);
@@ -37,7 +39,7 @@ fetch('/metadata.json')
         return response.json();
       })
       .then(secondaryData => {
-        console.log('Google Sheets data:', JSON.stringify(secondaryData, null, 2));
+        console.log('Frontend: Google Sheets data:', JSON.stringify(secondaryData, null, 2));
         const secondaryMap = new Map(secondaryData.map(item => [
           JSON.stringify(item.coordinates),
           item
@@ -54,14 +56,14 @@ fetch('/metadata.json')
         updateMarkers(mergedData);
       })
       .catch(error => {
-        console.error('Failed to fetch data:', error);
+        console.error('Frontend: Failed to fetch data:', error);
         allLocations = primaryData;
         populateFilters(primaryData, 'regionFilter', 'categoryFilter', 'priceFilter', 'scoreFilter');
         updateMarkers(primaryData);
       });
   })
   .catch(error => {
-    console.error('Failed to fetch metadata:', error);
+    console.error('Frontend: Failed to fetch metadata:', error);
   });
 
 function removeMarkers() {
