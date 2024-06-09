@@ -182,3 +182,5 @@ public/js/config.js
 
 # Allow
 !public/js/metadata.json
+!package.json
+!package-lock.json
