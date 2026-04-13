@@ -1,0 +1,19 @@
+export const CONFIG = {
+    SPREADSHEET_ID: '1EhPrOO-mzHmoLKkK3mUs-TOjGQJxus3D8c2-6A6nHLI',
+    SPREADSHEET_NAME: 'travels',
+    API_KEY: 'RMYOp0ikR8NysbpX00xF9N86QO4GfAzf8-DlCKxB',
+    R2_ACCESS_KEY: '8b69339bfc63db3762312b9990db39a0',
+    R2_SECRET_KEY: 'fe5dde286cd979ce410e0c03a8870dd68440c8b5451b6c821cfbf3cebdad675d',
+    R2_API_TOKEN: 'RMYOp0ikR8NysbpX00xF9N86QO4GfAzf8-DlCKxB',
+    TYPE: 'service_account',
+    PROJECT_ID: 'sheetautomation-326215',
+    PRIVATE_KEY_ID: 'd67e54379a4bea831ce9fa7122196d8b344ee892',
+    PRIVATE_KEY: '-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDYWQxlrfFYxNxK\nJWC6JnQm5CyAP48p4aOZ3A3+V+tuwwXOJYI/7kmLusdrwu53MYMrcXBupsTVyl9J\nAgcYHYUBANFDuVfy79DCA49LbAiaXM+HKN2ng2ecl61YMoH7+bIavHNMWUwm+saw\n/qw/c+dnxEtFndDZbU+GW86frdJJkpP0Z+jMshewe4w6m8ZHHx/u+7ZWvrK13Dds\nQBhB62s4BVl2JF8q/I/F5mGNkhz8q5eI+oykkjb8Il3E0xkDxGPnAP5k4PI3XKRl\nBo4Nl4hh8RM4QUNjZGiyAkvCJB+Pk+V/C9TdTlzlTGGicuECWmQreNHqUM0T2N7Z\nQQWwrnzjAgMBAAECggEADIXfB1Wxtisy+yG9vxixuXyUrNnA/jIe562Kq9HIAXHN\neLjIGM5AuJNXrr+qUQDvMEkRMn55v0xHBrFU2sr+o2e6NTrZweiqw0g0d6+psdG0\ne4Tci7E6AqDu+j92MbEq44xL+jvjAhCbBqy/KK8bUnDU0JNJfwRqSYMv6yNDHFoB\n6yp4CuhqRsu+BwGaTbT6GyvlFsdig/QJmcYJA5nT4nlbeKbKs9p8/KJO8vYL5x3n\nEAn23a/Y/PEWJ6xVzJ7dC0/2VIdNsGYKEtUZopoOTlSG2D1kIWxdu1pwKZ3FKpZa\nmnHHfFXe/p/9gwr0VlSjJLDlXyTKOsQ4B6vC0rOr0QKBgQD2jhIaNAI/jd6HOZdE\ndu1FwniMHWPP+/ZZLIUOdTYWxEa3eTUSTylGrqr43rLU4oT9onAM5i1dym2lU1dW\noDuGRg7yIS9Bu6ts/Ry192T1UYgC93H86w2RdCoMqQDVLY5DQErqHZBuNC1YYuBf\ne+rWuQUX06KgDfPIQbz+rotCcQKBgQDgor2mjZaxsFym4YcRQ1ZFu63l/HPeWcN7\nQ0xPxW5FNtL7myIGMXuzxkPoAcbCrPD5H8ybGSUzB4YD32pRDXtS+KPs/H1XSiTI\nzvu6wFhfJJlwB0wps2NH9WOqw9fBziE4yA6yZGmFhMBqHoHpvBZOkE+eauOqVjRC\nszK+VKu2kwKBgAzfsjZIDO4AnGP3L9zVUOJZmy3FwxZzE5PobTIqEJ7ztLWT0J+a\nHo+gQzEnf7L5+PO9bZhe1HOXRE5joaXWTAVg1xrxfKQ0Bml0dfFSb6UXksCE5yDL\nrTOxGxj6Ih7/d/QvATpkPMxkURHSZ+DUeZiopIlv9Yfh8p68QAAUYRUhAoGBAJkL\n5+CQ+QnJGecNIwQM97t8+icGkD7+s2PI3zY+UjnP94E7GbxUfG5od52bkDrUrz1c\nf/9v61tQFeuPjRT59Xr7MlxlTlRpjJRQCUwcflkcS3n7TtXehZbiRmxzEA3YDeRs\n0S6ToR057AqhDGweHKicQ9KwCrrkDqkfBESO1YsHAoGBAMdYiGYBpW1jWCLQyl/v\n+ESU+zEqYlSRHdo43tPAYRecG1OGLc61VGNsPY58aQTnc0bQ5XSMztJHyQSHkTDo\nfg54/ys/3sR5T2RY2miYkzEUD3LqYqJehHXXsYEl/18/c4N6rMtP3pLuHFO2xFsP\n/TuxU63IZXnKQrkVdgMED5tA\n-----END PRIVATE KEY-----\n',
+    CLIENT_EMAIL: 'renancatan@sheetautomation-326215.iam.gserviceaccount.com',
+    CLIENT_ID: '107651332334563371438',
+    AUTH_URI: 'https://accounts.google.com/o/oauth2/auth',
+    TOKEN_URI: 'https://oauth2.googleapis.com/token',
+    AUTH_PROVIDER_X509_CERT_URL: 'https://www.googleapis.com/oauth2/v1/certs',
+    CLIENT_X509_CERT_URL: 'https://www.googleapis.com/robot/v1/metadata/x509/renancatan%40sheetautomation-326215.iam.gserviceaccount.com'
+  };
+  
