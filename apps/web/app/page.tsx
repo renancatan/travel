@@ -25,16 +25,38 @@ type MediaItem = {
   metadata_source: string | null;
   thumbnail_relative_path: string | null;
   thumbnail_content_type: string | null;
+  analysis_frame_count: number;
+  analysis_frame_timestamps_seconds: number[];
   media_score: number | null;
   media_score_label: string | null;
   detected_at: string;
   created_at: string;
 };
 
+type RenderedReel = {
+  draft_name: string;
+  relative_path: string;
+  content_type: string;
+  file_size_bytes: number;
+  rendered_at: string;
+  output_width: number;
+  output_height: number;
+  fps: number;
+  estimated_total_duration_seconds: number;
+  video_strategy: string;
+};
+
 type Album = {
   id: string;
   name: string;
   description: string | null;
+  description_meta?: {
+    likely_categories?: string[];
+    analysis_mode?: string;
+    route?: Record<string, unknown> | null;
+  } | null;
+  cached_suggestion?: AlbumSuggestion | null;
+  rendered_reel?: RenderedReel | null;
   created_at: string;
   updated_at: string;
   media_items: MediaItem[];
@@ -47,6 +69,110 @@ type MediaInsight = {
   use_case: string;
 };
 
+type CurationCandidate = {
+  media_id: string;
+  media_kind: string;
+  score: number;
+  reason: string;
+  group_id: string | null;
+};
+
+type ShotGroup = {
+  group_id: string;
+  label: string;
+  representative_media_id: string;
+  picked_media_id: string;
+  media_ids: string[];
+  item_count: number;
+};
+
+type ReelPlanStep = {
+  step_number: number;
+  role: string;
+  media_id: string;
+  media_kind: string;
+  source_role: string;
+  selection_mode: string;
+  clip_start_seconds: number | null;
+  clip_end_seconds: number | null;
+  suggested_duration_seconds: number;
+  edit_instruction: string;
+  why: string;
+};
+
+type ReelPlan = {
+  cover_media_id: string | null;
+  video_strategy: string;
+  estimated_total_duration_seconds: number;
+  steps: ReelPlanStep[];
+};
+
+type ReelDraftAsset = {
+  media_id: string;
+  original_filename: string;
+  media_kind: string;
+  content_type: string;
+  relative_path: string;
+  thumbnail_relative_path: string | null;
+};
+
+type ReelDraftStep = {
+  step_number: number;
+  role: string;
+  media_id: string;
+  original_filename: string;
+  media_kind: string;
+  source_role: string;
+  selection_mode: string;
+  clip_start_seconds: number | null;
+  clip_end_seconds: number | null;
+  relative_path: string;
+  suggested_duration_seconds: number;
+  edit_instruction: string;
+  why: string;
+};
+
+type ReelRenderClip = {
+  step_number: number;
+  role: string;
+  media_id: string;
+  original_filename: string;
+  media_kind: string;
+  render_mode: string;
+  source_relative_path: string;
+  output_relative_path: string;
+  clip_start_seconds: number | null;
+  clip_end_seconds: number | null;
+  output_duration_seconds: number;
+};
+
+type ReelRenderSpec = {
+  backend: string;
+  backend_available: boolean;
+  working_directory: string;
+  output_relative_path: string;
+  concat_relative_path: string;
+  shell_commands: string[];
+  notes: string[];
+  clips: ReelRenderClip[];
+};
+
+type ReelDraft = {
+  draft_name: string;
+  title: string;
+  caption: string;
+  cover_media_id: string | null;
+  video_strategy: string;
+  estimated_total_duration_seconds: number;
+  output_width: number;
+  output_height: number;
+  fps: number;
+  audio_strategy: string;
+  steps: ReelDraftStep[];
+  assets: ReelDraftAsset[];
+  render_spec: ReelRenderSpec | null;
+};
+
 type AlbumSuggestion = {
   album_summary: string;
   visual_trip_story: string;
@@ -54,6 +180,12 @@ type AlbumSuggestion = {
   caption_ideas: string[];
   cover_image_media_id: string | null;
   media_insights: MediaInsight[];
+  cover_candidates: CurationCandidate[];
+  carousel_candidates: CurationCandidate[];
+  reel_candidates: CurationCandidate[];
+  reel_plan: ReelPlan | null;
+  reel_draft: ReelDraft | null;
+  shot_groups: ShotGroup[];
   analysis_mode: string;
   route: Record<string, unknown> | null;
 };
@@ -66,9 +198,24 @@ type AutoDescriptionResponse = {
   route: Record<string, unknown> | null;
 };
 
+type RenderReelResponse = {
+  album: Album;
+  rendered_reel: RenderedReel;
+};
+
 type DescriptionMeta = {
   likelyCategories: string[];
   analysisMode: string;
+};
+
+type UploadMediaResponse = {
+  album: Album;
+  media_item: MediaItem;
+};
+
+type AnalysisFrameSample = {
+  timestamp_seconds: number;
+  data_url: string;
 };
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
@@ -121,6 +268,57 @@ function formatGps(gps: Record<string, unknown>): string {
   return altitude === null ? base : `${base} - ${altitude.toFixed(0)} m`;
 }
 
+function formatCandidateScore(score: number): string {
+  return `${score.toFixed(1)} pts`;
+}
+
+function formatVideoStrategy(value: string | null | undefined): string {
+  if (value === "hero_video") {
+    return "hero video";
+  }
+  if (value === "multi_clip_sequence") {
+    return "multi-clip sequence";
+  }
+  if (value === "still_sequence") {
+    return "still-led sequence";
+  }
+  return "mixed sequence";
+}
+
+function formatSourceRole(value: string): string {
+  if (value === "hero_video") {
+    return "hero video";
+  }
+  if (value === "supporting_video") {
+    return "supporting video";
+  }
+  return "still image";
+}
+
+function formatClipWindow(start: number | null, end: number | null): string | null {
+  if (start === null || end === null) {
+    return null;
+  }
+  return `${start.toFixed(1)}s - ${end.toFixed(1)}s`;
+}
+
+function formatDraftAssetStatus(asset: ReelDraftAsset): string {
+  if (asset.media_kind === "video") {
+    return asset.thumbnail_relative_path ? "stored locally • preview frame ready" : "stored locally";
+  }
+  return "stored locally in album media";
+}
+
+function formatRenderMode(value: string): string {
+  if (value === "video_trim") {
+    return "trimmed video clip";
+  }
+  if (value === "image_hold") {
+    return "held still image";
+  }
+  return value;
+}
+
 function normalizeAlbumName(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -136,6 +334,145 @@ function upsertAlbum(albums: Album[], updatedAlbum: Album): Album[] {
 
 function removeAlbum(albums: Album[], albumId: string): Album[] {
   return albums.filter((album) => album.id !== albumId);
+}
+
+function buildAlbumCaches(albums: Album[]): {
+  suggestions: Record<string, AlbumSuggestion>;
+  descriptionMeta: Record<string, DescriptionMeta>;
+} {
+  const nextSuggestions: Record<string, AlbumSuggestion> = {};
+  const nextDescriptionMeta: Record<string, DescriptionMeta> = {};
+
+  for (const album of albums) {
+    if (album.cached_suggestion) {
+      nextSuggestions[album.id] = album.cached_suggestion;
+    }
+    if (album.description_meta) {
+      nextDescriptionMeta[album.id] = {
+        likelyCategories: album.description_meta.likely_categories ?? [],
+        analysisMode: album.description_meta.analysis_mode ?? "unknown",
+      };
+    }
+  }
+
+  return {
+    suggestions: nextSuggestions,
+    descriptionMeta: nextDescriptionMeta,
+  };
+}
+
+function downloadJsonFile(filename: string, payload: unknown) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function extractVideoFrameSamples(file: File): Promise<AnalysisFrameSample[]> {
+  const objectUrl = URL.createObjectURL(file);
+  const video = document.createElement("video");
+  video.preload = "auto";
+  video.muted = true;
+  video.playsInline = true;
+  video.src = objectUrl;
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const handleLoaded = () => {
+        cleanup();
+        resolve();
+      };
+      const handleError = () => {
+        cleanup();
+        reject(new Error(`Could not read video frames from ${file.name}.`));
+      };
+      const cleanup = () => {
+        video.removeEventListener("loadeddata", handleLoaded);
+        video.removeEventListener("error", handleError);
+      };
+
+      video.addEventListener("loadeddata", handleLoaded);
+      video.addEventListener("error", handleError);
+    });
+
+    const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
+    const timestamps = duration > 0
+      ? Array.from(
+          new Set(
+            [duration * 0.15, duration * 0.5, duration * 0.85]
+              .map((value) => {
+                const capped = Math.min(value, Math.max(duration - 0.05, 0));
+                return Number(Math.max(capped, 0).toFixed(2));
+              })
+              .filter((value) => Number.isFinite(value)),
+          ),
+        )
+      : [0];
+
+    const maxEdge = 960;
+    const scale = Math.min(1, maxEdge / Math.max(video.videoWidth || 1, video.videoHeight || 1));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round((video.videoWidth || 1) * scale));
+    canvas.height = Math.max(1, Math.round((video.videoHeight || 1) * scale));
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return [];
+    }
+
+    const frames: AnalysisFrameSample[] = [];
+    for (const timestamp of timestamps) {
+      await seekVideoForFrame(video, timestamp);
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      frames.push({
+        timestamp_seconds: timestamp,
+        data_url: canvas.toDataURL("image/jpeg", 0.82),
+      });
+    }
+
+    return frames;
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+    video.removeAttribute("src");
+    video.load();
+  }
+}
+
+async function seekVideoForFrame(video: HTMLVideoElement, timestamp: number): Promise<void> {
+  const safeTimestamp =
+    Number.isFinite(video.duration) && video.duration > 0
+      ? Math.min(Math.max(timestamp, 0), Math.max(video.duration - 0.05, 0))
+      : 0;
+
+  if (Math.abs(video.currentTime - safeTimestamp) < 0.05) {
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    return;
+  }
+
+  await new Promise<void>((resolve, reject) => {
+    const handleSeeked = () => {
+      cleanup();
+      resolve();
+    };
+    const handleError = () => {
+      cleanup();
+      reject(new Error("Video seek failed while sampling frames."));
+    };
+    const cleanup = () => {
+      video.removeEventListener("seeked", handleSeeked);
+      video.removeEventListener("error", handleError);
+    };
+
+    video.addEventListener("seeked", handleSeeked);
+    video.addEventListener("error", handleError);
+    video.currentTime = safeTimestamp;
+  });
+
+  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 export default function Page() {
@@ -170,8 +507,10 @@ export default function Page() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
   const [isSavingDescription, setIsSavingDescription] = useState(false);
+  const [autoRebuiltSuggestionAlbumIds, setAutoRebuiltSuggestionAlbumIds] = useState<Record<string, boolean>>({});
   const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
+  const [isRenderingReel, setIsRenderingReel] = useState(false);
   const [isPending, startTransition] = useTransition();
 
   const sidebarAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
@@ -179,6 +518,8 @@ export default function Page() {
     albumMode === "new" ? albums.find((album) => album.id === newAlbumId) ?? null : sidebarAlbum;
   const activeSuggestions = workflowAlbum ? suggestionsByAlbum[workflowAlbum.id] ?? null : null;
   const activeDescriptionMeta = workflowAlbum ? descriptionMetaByAlbum[workflowAlbum.id] ?? null : null;
+  const renderSpec = activeSuggestions?.reel_draft?.render_spec ?? null;
+  const renderBackendAvailable = Boolean(renderSpec?.backend_available);
   const uploadTargetAlbum = workflowAlbum;
   const showUploadStep = Boolean(uploadTargetAlbum);
   const showPostUploadSteps = Boolean(workflowAlbum && workflowAlbum.media_items.length > 0);
@@ -218,6 +559,9 @@ export default function Page() {
 
       const data = (await response.json()) as Album[];
       setAlbums(data);
+      const caches = buildAlbumCaches(data);
+      setSuggestionsByAlbum(caches.suggestions);
+      setDescriptionMetaByAlbum(caches.descriptionMeta);
       setAlbumsStatus({ tone: "idle", message: "" });
 
       if (!preserveSelected) {
@@ -250,6 +594,30 @@ export default function Page() {
 
       const data = (await response.json()) as Album;
       setAlbums((current) => upsertAlbum(current, data));
+      if (data.cached_suggestion) {
+        setSuggestionsByAlbum((current) => ({ ...current, [data.id]: data.cached_suggestion as AlbumSuggestion }));
+      } else {
+        setSuggestionsByAlbum((current) => {
+          const next = { ...current };
+          delete next[data.id];
+          return next;
+        });
+      }
+      if (data.description_meta) {
+        setDescriptionMetaByAlbum((current) => ({
+          ...current,
+          [data.id]: {
+            likelyCategories: data.description_meta?.likely_categories ?? [],
+            analysisMode: data.description_meta?.analysis_mode ?? "unknown",
+          },
+        }));
+      } else {
+        setDescriptionMetaByAlbum((current) => {
+          const next = { ...current };
+          delete next[data.id];
+          return next;
+        });
+      }
       return data;
     } catch (error) {
       setStatus({
@@ -385,6 +753,27 @@ export default function Page() {
       message: "Choose Automatic AI or Manual above first, then run the AI review.",
     });
   }, [workflowAlbum, activeSuggestions]);
+
+  useEffect(() => {
+    if (albumMode !== "existing" || !workflowAlbum || activeSuggestions || isAnalyzing) {
+      return;
+    }
+
+    if (workflowAlbum.media_items.length === 0 || !workflowAlbum.description) {
+      return;
+    }
+
+    if (workflowAlbum.cached_suggestion || autoRebuiltSuggestionAlbumIds[workflowAlbum.id]) {
+      return;
+    }
+
+    setAutoRebuiltSuggestionAlbumIds((current) => ({ ...current, [workflowAlbum.id]: true }));
+    setSuggestionStatus({
+      tone: "idle",
+      message: "No cached AI review was found for this older album. Rebuilding it now...",
+    });
+    void runAiSuggestions(workflowAlbum.id, "AI review rebuilt and cached for this album.");
+  }, [albumMode, workflowAlbum, activeSuggestions, isAnalyzing, autoRebuiltSuggestionAlbumIds]);
 
   function handleModeChange(mode: "new" | "existing") {
     clearUploadSelection();
@@ -543,6 +932,22 @@ export default function Page() {
     }
   }
 
+  async function uploadVideoAnalysisFrames(
+    albumId: string,
+    mediaId: string,
+    frames: AnalysisFrameSample[],
+  ): Promise<void> {
+    const response = await fetch(`${API_BASE_URL}/albums/${albumId}/media/${mediaId}/analysis-frames`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ frames }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Video analysis frame upload failed (${response.status})`);
+    }
+  }
+
   async function handleUploadFiles() {
     const targetAlbum = uploadTargetAlbum;
 
@@ -559,6 +964,10 @@ export default function Page() {
     setStatus({ tone: "idle", message: `Uploading ${selectedFiles.length} file(s)...` });
 
     try {
+      let sampledVideoCount = 0;
+      let sampledFrameCount = 0;
+      const warnings: string[] = [];
+
       for (const file of selectedFiles) {
         const buffer = await file.arrayBuffer();
         const response = await fetch(`${API_BASE_URL}/albums/${targetAlbum.id}/upload`, {
@@ -573,6 +982,24 @@ export default function Page() {
         if (!response.ok) {
           throw new Error(`Upload failed for ${file.name} (${response.status})`);
         }
+
+        const uploadResult = (await response.json()) as UploadMediaResponse;
+        if (uploadResult.media_item.media_kind === "video") {
+          try {
+            const frames = await extractVideoFrameSamples(file);
+            if (frames.length > 0) {
+              await uploadVideoAnalysisFrames(targetAlbum.id, uploadResult.media_item.id, frames);
+              sampledVideoCount += 1;
+              sampledFrameCount += frames.length;
+            } else {
+              warnings.push(`No browser frame samples were created for ${file.name}.`);
+            }
+          } catch (error) {
+            warnings.push(
+              error instanceof Error ? `${file.name}: ${error.message}` : `${file.name}: video frame sampling failed.`,
+            );
+          }
+        }
       }
 
       const fileInput = document.getElementById("upload-input") as HTMLInputElement | null;
@@ -585,7 +1012,10 @@ export default function Page() {
       setSelectedAlbumId(targetAlbum.id);
       setStatus({
         tone: "ok",
-        message: `Upload finished for "${targetAlbum.name}". Step 3 is ready for description setup.`,
+        message:
+          `Upload finished for "${targetAlbum.name}". Step 3 is ready for description setup.` +
+          (sampledVideoCount > 0 ? ` Sampled ${sampledFrameCount} AI frame(s) from ${sampledVideoCount} video(s).` : "") +
+          (warnings.length > 0 ? ` ${warnings.join(" ")}` : ""),
       });
     } catch (error) {
       setStatus({
@@ -796,8 +1226,153 @@ export default function Page() {
     }
   }
 
+  async function handleCopyReelCaption() {
+    if (!activeSuggestions?.reel_draft) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Run AI review first. The reel draft is not ready yet.",
+      });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(activeSuggestions.reel_draft.caption);
+      setSuggestionStatus({
+        tone: "ok",
+        message: "Reel caption copied to your clipboard.",
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not copy the caption.",
+      });
+    }
+  }
+
+  function handleDownloadReelDraft() {
+    if (!activeSuggestions?.reel_draft) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Run AI review first. The reel draft is not ready yet.",
+      });
+      return;
+    }
+
+    downloadJsonFile(`${activeSuggestions.reel_draft.draft_name}.json`, activeSuggestions.reel_draft);
+    setSuggestionStatus({
+      tone: "ok",
+      message: "Reel draft JSON downloaded.",
+    });
+  }
+
+  async function handleCopyRenderCommands() {
+    if (!activeSuggestions?.reel_draft?.render_spec?.shell_commands.length) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "No render commands are available yet for this reel draft.",
+      });
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(activeSuggestions.reel_draft.render_spec.shell_commands.join("\n"));
+      setSuggestionStatus({
+        tone: "ok",
+        message: "Render commands copied to your clipboard.",
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not copy render commands.",
+      });
+    }
+  }
+
+  async function handleRenderReel() {
+    if (!workflowAlbum) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album first. There is no active reel to render.",
+      });
+      return;
+    }
+
+    if (!activeSuggestions?.reel_draft) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Run AI review first. The reel draft is not ready yet.",
+      });
+      return;
+    }
+
+    if (!renderBackendAvailable) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Local reel rendering is disabled because ffmpeg is not installed on this machine yet.",
+      });
+      return;
+    }
+
+    setIsRenderingReel(true);
+    setSuggestionStatus({
+      tone: "idle",
+      message: "Rendering reel locally...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/rendered-reel`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Render failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as RenderReelResponse;
+      setAlbums((current) => upsertAlbum(current, data.album));
+      setSuggestionStatus({
+        tone: "ok",
+        message: `Rendered reel is ready for "${data.album.name}".`,
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Render failed.",
+      });
+    } finally {
+      setIsRenderingReel(false);
+    }
+  }
+
+  function handleDownloadRenderedReel() {
+    if (!workflowAlbum?.rendered_reel) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Render a reel first. There is no final video to download yet.",
+      });
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.href = `${API_BASE_URL}/albums/${workflowAlbum.id}/rendered-reel/content`;
+    link.download = `${workflowAlbum.rendered_reel.draft_name}.mp4`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
   function getInsightForMedia(mediaId: string): MediaInsight | null {
     return activeSuggestions?.media_insights.find((insight) => insight.media_id === mediaId) ?? null;
+  }
+
+  function getMediaLabel(mediaId: string | null): string {
+    if (!mediaId || !workflowAlbum) {
+      return "Unknown media";
+    }
+
+    const mediaItem = workflowAlbum.media_items.find((item) => item.id === mediaId);
+    return mediaItem?.original_filename ?? mediaId;
   }
 
   return (
@@ -1303,6 +1878,347 @@ export default function Page() {
                           ))}
                         </ol>
                       </div>
+                      <div className="ai-card">
+                        <strong>Cover picks</strong>
+                        {activeSuggestions.cover_candidates.length > 0 ? (
+                          <div className="candidate-list">
+                            {activeSuggestions.cover_candidates.map((candidate) => (
+                              <div className="candidate-row" key={`cover-${candidate.media_id}`}>
+                                <div>
+                                  <strong>{getMediaLabel(candidate.media_id)}</strong>
+                                  <span>{candidate.reason}</span>
+                                </div>
+                                <em>{formatCandidateScore(candidate.score)}</em>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p>No cover picks yet.</p>
+                        )}
+                      </div>
+                      <div className="ai-card">
+                        <strong>Carousel picks</strong>
+                        {activeSuggestions.carousel_candidates.length > 0 ? (
+                          <div className="candidate-list">
+                            {activeSuggestions.carousel_candidates.map((candidate) => (
+                              <div className="candidate-row" key={`carousel-${candidate.media_id}`}>
+                                <div>
+                                  <strong>{getMediaLabel(candidate.media_id)}</strong>
+                                  <span>{candidate.reason}</span>
+                                </div>
+                                <em>{formatCandidateScore(candidate.score)}</em>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p>No carousel picks yet.</p>
+                        )}
+                      </div>
+                      <div className="ai-card ai-card-wide">
+                        <strong>Reel candidates</strong>
+                        {activeSuggestions.reel_candidates.length > 0 ? (
+                          <div className="candidate-list">
+                            {activeSuggestions.reel_candidates.map((candidate) => (
+                              <div className="candidate-row" key={`reel-${candidate.media_id}`}>
+                                <div>
+                                  <strong>{getMediaLabel(candidate.media_id)}</strong>
+                                  <span>{candidate.reason}</span>
+                                </div>
+                                <em>{formatCandidateScore(candidate.score)}</em>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p>No reel candidates yet.</p>
+                        )}
+                      </div>
+                      <div className="ai-card ai-card-wide">
+                        <div className="reel-plan-header">
+                          <div>
+                            <strong>Reel plan</strong>
+                            <p>
+                              {activeSuggestions.reel_plan
+                                ? `${activeSuggestions.reel_plan.steps.length} beat(s) • estimated ${formatDuration(
+                                    activeSuggestions.reel_plan.estimated_total_duration_seconds,
+                                  )} • ${formatVideoStrategy(activeSuggestions.reel_plan.video_strategy)}`
+                                : "A step-by-step short-form sequence appears here after the reel read is built."}
+                            </p>
+                          </div>
+                          {activeSuggestions.reel_plan?.cover_media_id ? (
+                            <span className="reel-plan-cover">
+                              Cover: {getMediaLabel(activeSuggestions.reel_plan.cover_media_id)}
+                            </span>
+                          ) : null}
+                        </div>
+                        {activeSuggestions.reel_plan?.steps.length ? (
+                          <div className="reel-plan-list">
+                            {activeSuggestions.reel_plan.steps.map((step) => (
+                              <div className="reel-plan-step" key={`reel-plan-${step.step_number}-${step.media_id}`}>
+                                <div className="reel-plan-step-header">
+                                  <div>
+                                    <span className="reel-plan-index">Step {step.step_number}</span>
+                                    <strong>
+                                      {step.role}: {getMediaLabel(step.media_id)}
+                                    </strong>
+                                  </div>
+                                  <div className="reel-plan-meta">
+                                    <span>
+                                      {step.media_kind} • {formatSourceRole(step.source_role)}
+                                    </span>
+                                    {step.selection_mode === "video_clip" ? (
+                                      <span>{formatClipWindow(step.clip_start_seconds, step.clip_end_seconds)}</span>
+                                    ) : null}
+                                    <em>{formatDuration(step.suggested_duration_seconds)}</em>
+                                  </div>
+                                </div>
+                                <p>{step.edit_instruction}</p>
+                                <small>{step.why}</small>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p>No reel plan yet.</p>
+                        )}
+                      </div>
+                      <div className="ai-card ai-card-wide">
+                        <div className="reel-plan-header">
+                          <div>
+                            <strong>Reel draft export</strong>
+                            <p>
+                              {activeSuggestions.reel_draft
+                                ? `${activeSuggestions.reel_draft.output_width}x${activeSuggestions.reel_draft.output_height} • ${activeSuggestions.reel_draft.fps} fps • ${activeSuggestions.reel_draft.assets.length} asset(s) • ${formatVideoStrategy(activeSuggestions.reel_draft.video_strategy)}`
+                                : "A downloadable reel draft manifest appears here after the AI review runs."}
+                            </p>
+                          </div>
+                          {activeSuggestions.reel_draft ? (
+                            <div className="actions">
+                              <button className="button-secondary" onClick={handleCopyReelCaption} type="button">
+                                Copy caption
+                              </button>
+                              {activeSuggestions.reel_draft.render_spec?.shell_commands.length ? (
+                                <button className="button-secondary" onClick={handleCopyRenderCommands} type="button">
+                                  Copy render commands
+                                </button>
+                              ) : null}
+                              <button
+                                className="button-secondary"
+                                disabled={!renderBackendAvailable || isRenderingReel}
+                                onClick={handleRenderReel}
+                                title={
+                                  renderBackendAvailable
+                                    ? "Render the current reel draft locally."
+                                    : "Install ffmpeg locally to enable reel rendering."
+                                }
+                                type="button"
+                              >
+                                {isRenderingReel
+                                  ? "Rendering..."
+                                  : !renderBackendAvailable
+                                    ? "ffmpeg required"
+                                  : workflowAlbum?.rendered_reel
+                                    ? "Re-render reel"
+                                    : "Render reel"}
+                              </button>
+                              <button className="button-primary" onClick={handleDownloadReelDraft} type="button">
+                                Download draft JSON
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        {activeSuggestions.reel_draft ? (
+                          <div className="reel-draft-grid">
+                            <div className="meta-card reel-draft-card">
+                              <strong>Draft title</strong>
+                              <span>{activeSuggestions.reel_draft.title}</span>
+                            </div>
+                            <div className="meta-card reel-draft-card">
+                              <strong>Cover</strong>
+                              <span>{getMediaLabel(activeSuggestions.reel_draft.cover_media_id)}</span>
+                            </div>
+                            <div className="meta-card reel-draft-card">
+                              <strong>Audio</strong>
+                              <span>{activeSuggestions.reel_draft.audio_strategy}</span>
+                            </div>
+                            <div className="meta-card reel-draft-card">
+                              <strong>Video strategy</strong>
+                              <span>{formatVideoStrategy(activeSuggestions.reel_draft.video_strategy)}</span>
+                            </div>
+                            <div className="meta-card reel-draft-card">
+                              <strong>Length</strong>
+                              <span>{formatDuration(activeSuggestions.reel_draft.estimated_total_duration_seconds)}</span>
+                            </div>
+                            <div className="ai-card ai-card-wide">
+                              <strong>Caption preview</strong>
+                              <p>{activeSuggestions.reel_draft.caption}</p>
+                            </div>
+                            <div className="ai-card ai-card-wide">
+                              <strong>Draft assets</strong>
+                              <div className="candidate-list">
+                                {activeSuggestions.reel_draft.assets.map((asset) => (
+                                  <div className="candidate-row" key={`draft-asset-${asset.media_id}`}>
+                                    <div>
+                                      <strong>{asset.original_filename}</strong>
+                                      <span>
+                                        {asset.media_kind} • {asset.content_type}
+                                      </span>
+                                    </div>
+                                    <em>{formatDraftAssetStatus(asset)}</em>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            <div className="ai-card ai-card-wide">
+                              <strong>Draft steps</strong>
+                              <div className="candidate-list">
+                                {activeSuggestions.reel_draft.steps.map((step) => (
+                                  <div className="candidate-row" key={`draft-step-${step.step_number}-${step.media_id}`}>
+                                    <div>
+                                      <strong>
+                                        Step {step.step_number}: {step.role} - {step.original_filename}
+                                      </strong>
+                                      <span>
+                                        {formatSourceRole(step.source_role)}
+                                        {step.selection_mode === "video_clip"
+                                          ? ` • ${formatClipWindow(step.clip_start_seconds, step.clip_end_seconds)}`
+                                          : ""}
+                                      </span>
+                                    </div>
+                                    <em>{formatDuration(step.suggested_duration_seconds)}</em>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                            {activeSuggestions.reel_draft.render_spec ? (
+                              <div className="ai-card ai-card-wide">
+                                <div className="reel-plan-header">
+                                  <div>
+                                    <strong>Render spec</strong>
+                                    <p>
+                                      {activeSuggestions.reel_draft.render_spec.backend_available
+                                        ? `${activeSuggestions.reel_draft.render_spec.backend} is available locally.`
+                                        : `${activeSuggestions.reel_draft.render_spec.backend} commands are ready, but the binary is not installed on this machine.`}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div className="reel-draft-grid">
+                                  <div className="meta-card reel-draft-card">
+                                    <strong>Backend</strong>
+                                    <span>{activeSuggestions.reel_draft.render_spec.backend}</span>
+                                  </div>
+                                  <div className="meta-card reel-draft-card">
+                                    <strong>Run from</strong>
+                                    <span>{activeSuggestions.reel_draft.render_spec.working_directory}</span>
+                                  </div>
+                                  <div className="meta-card reel-draft-card">
+                                    <strong>Output file</strong>
+                                    <span>{activeSuggestions.reel_draft.render_spec.output_relative_path}</span>
+                                  </div>
+                                  <div className="meta-card reel-draft-card">
+                                    <strong>Concat file</strong>
+                                    <span>{activeSuggestions.reel_draft.render_spec.concat_relative_path}</span>
+                                  </div>
+                                </div>
+                                {!renderBackendAvailable ? (
+                                  <div className="render-note-list">
+                                    <div className="render-note">
+                                      Install `ffmpeg` locally to enable the `Render reel` button and generate a final preview video in this app.
+                                    </div>
+                                  </div>
+                                ) : null}
+                                {activeSuggestions.reel_draft.render_spec.notes.length ? (
+                                  <div className="render-note-list">
+                                    {activeSuggestions.reel_draft.render_spec.notes.map((note) => (
+                                      <div className="render-note" key={note}>
+                                        {note}
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                <div className="candidate-list">
+                                  {activeSuggestions.reel_draft.render_spec.clips.map((clip) => (
+                                    <div className="candidate-row" key={`render-clip-${clip.step_number}-${clip.media_id}`}>
+                                      <div>
+                                        <strong>
+                                          Step {clip.step_number}: {clip.role} - {clip.original_filename}
+                                        </strong>
+                                        <span>
+                                          {formatRenderMode(clip.render_mode)}
+                                          {clip.media_kind === "video"
+                                            ? ` • ${formatClipWindow(clip.clip_start_seconds, clip.clip_end_seconds)}`
+                                            : ""}
+                                        </span>
+                                        <span>
+                                          output: {clip.output_relative_path}
+                                        </span>
+                                      </div>
+                                      <em>{formatDuration(clip.output_duration_seconds)}</em>
+                                    </div>
+                                  ))}
+                                </div>
+                                <details className="command-details">
+                                  <summary>Shell commands</summary>
+                                  <pre className="command-block">
+                                    {activeSuggestions.reel_draft.render_spec.shell_commands.join("\n")}
+                                  </pre>
+                                </details>
+                              </div>
+                            ) : null}
+                            {workflowAlbum?.rendered_reel ? (
+                              <div className="ai-card ai-card-wide">
+                                <div className="reel-plan-header">
+                                  <div>
+                                    <strong>Rendered reel</strong>
+                                    <p>
+                                      Ready at {formatDate(workflowAlbum.rendered_reel.rendered_at)} •{" "}
+                                      {workflowAlbum.rendered_reel.output_width}x{workflowAlbum.rendered_reel.output_height} •{" "}
+                                      {workflowAlbum.rendered_reel.fps} fps •{" "}
+                                      {formatDuration(workflowAlbum.rendered_reel.estimated_total_duration_seconds)}
+                                    </p>
+                                  </div>
+                                  <div className="actions">
+                                    <button className="button-primary" onClick={handleDownloadRenderedReel} type="button">
+                                      Download rendered reel
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="render-preview">
+                                  <video
+                                    controls
+                                    preload="metadata"
+                                    src={`${API_BASE_URL}/albums/${workflowAlbum.id}/rendered-reel/content`}
+                                  />
+                                </div>
+                                <p className="render-preview-meta">
+                                  {formatBytes(workflowAlbum.rendered_reel.file_size_bytes)} •{" "}
+                                  {formatVideoStrategy(workflowAlbum.rendered_reel.video_strategy)}
+                                </p>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <p>No reel draft available yet.</p>
+                        )}
+                      </div>
+                      <div className="ai-card ai-card-wide">
+                        <strong>Shot groups</strong>
+                        {activeSuggestions.shot_groups.length > 0 ? (
+                          <div className="candidate-list">
+                            {activeSuggestions.shot_groups.map((group) => (
+                              <div className="candidate-row" key={group.group_id}>
+                                <div>
+                                  <strong>{group.label}</strong>
+                                  <span>
+                                    {group.item_count} item(s), pick: {getMediaLabel(group.picked_media_id)}
+                                  </span>
+                                </div>
+                                <em>{group.group_id}</em>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p>No duplicate-style groups detected yet.</p>
+                        )}
+                      </div>
                     </div>
                   ) : null}
                 </div>
@@ -1397,6 +2313,12 @@ export default function Page() {
                             <div className="meta-card">
                               <strong>Metadata read</strong>
                               <span>{item.metadata_source}</span>
+                            </div>
+                          ) : null}
+                          {item.analysis_frame_count > 0 ? (
+                            <div className="meta-card">
+                              <strong>AI video frames</strong>
+                              <span>{item.analysis_frame_count} sampled</span>
                             </div>
                           ) : null}
                           {item.captured_at ? (

@@ -8,8 +8,12 @@ from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from google import genai
-from google.genai import types
+try:
+    from google import genai
+    from google.genai import types
+except ImportError:  # pragma: no cover - optional dependency path
+    genai = None
+    types = None
 
 
 @dataclass(frozen=True)
@@ -29,7 +33,7 @@ class MultiProviderRouter:
 
         self.gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.gemini_fast_model = os.getenv("GEMINI_FAST_MODEL", "gemini-2.5-flash")
-        self.gemini_client = genai.Client(api_key=self.gemini_api_key) if self.gemini_api_key else None
+        self.gemini_client = genai.Client(api_key=self.gemini_api_key) if self.gemini_api_key and genai else None
 
         self.azure_openai_gpt4_endpoint = os.getenv("AZURE_OPENAI_GPT4_ENDPOINT", "")
         self.azure_openai_gpt4_api_key = os.getenv("AZURE_OPENAI_GPT4_API_KEY", "")
@@ -127,6 +131,8 @@ class MultiProviderRouter:
     ) -> str:
         if not self.gemini_client:
             raise ValueError("Set GEMINI_API_KEY or GOOGLE_API_KEY before using the ggl2 route.")
+        if not types:
+            raise ValueError("google-genai is not installed, so the Gemini route is unavailable in this shell.")
 
         config_kwargs: dict[str, object] = {
             "temperature": temperature,
@@ -299,4 +305,3 @@ class MultiProviderRouter:
                     return text[start : index + 1]
 
         return None
-

@@ -56,6 +56,10 @@ Review and AI analysis:
 - likely category tags
 - caption ideas
 - per-image notes when available
+- ranked cover, carousel, and reel candidates
+- a first-pass reel plan with ordered beats, suggested durations, and edit notes
+- a downloadable reel draft manifest with caption, output settings, steps, selected assets, and a render-ready `ffmpeg` spec
+- a local reel render action that can produce a saved preview/download when `ffmpeg` is available
 
 ## What Has Been Built
 
@@ -90,8 +94,16 @@ Current backend capabilities:
 - local media storage
 - image metadata extraction including JPEG EXIF timestamp, device, and GPS when present
 - ISO-based video parsing for common `mp4` / `mov` style uploads without external tooling
+- browser-side video frame sampling so uploaded clips can provide real visual samples to the AI review flow
 - optional `ffprobe` enrichment and optional `ffmpeg` thumbnail generation when those binaries are available
 - heuristic media scoring for images and videos
+- deterministic curation output for cover, carousel, and reel candidates
+- deterministic reel-plan output that turns reel candidates into a short ordered sequence
+- deterministic reel-draft export output that can later feed a real render worker
+- reel plans now choose a `video_strategy` (`hero_video`, `multi_clip_sequence`, or `still_sequence`) and attach clip windows to video beats
+- reel drafts now include a render-ready `ffmpeg` spec with working directory, concat file, normalized clip outputs, and copyable shell commands
+- a reel renderer now turns that render spec into a saved `.mp4` preview/download when `ffmpeg` is available
+- duplicate-style shot grouping based on filename/media patterns
 - Gemini-backed LLM routing reused from the sibling analytics project
 - multimodal image-aware suggestion path for supported raster images
 - metadata fallback path when image analysis is unavailable
@@ -105,12 +117,20 @@ Implemented in `apps/web`:
 - hidden upload step until target exists
 - post-upload description mode chooser
 - AI review panel
+- curation panels for cover picks, carousel picks, reel candidates, and shot groups
 - media card preview grid
 - image review cards now show captured time, source device, and GPS when available
 - richer video review cards with poster support when thumbnails exist
+- video cards now show how many AI-readable sampled frames were attached when browser sampling succeeded
 - delete actions for the current album and for individual media items
 - local new-album draft persistence in the browser while the user is still editing
 - duplicate-name blocking for new albums before creation
+- AI review is now cached in each album record and rehydrated when albums are loaded again
+- older albums without cached AI review now lazily rebuild that cache the first time they are opened in `Existing album` mode
+- reel draft export UI now avoids showing raw storage paths and long overflowing identifiers in the main review cards
+- reel draft export UI now shows the render backend, working directory, output paths, render notes, render clips, and copyable shell commands
+- the UI now includes `Render reel`, an inline rendered preview, and `Download rendered reel` when a finished render exists
+- the `Render reel` button is now disabled when `ffmpeg` is unavailable, so the app no longer fires avoidable `409` render requests on machines without local media tooling
 
 ## Current State
 
@@ -136,6 +156,14 @@ Implemented in `apps/web`:
 - upload now clears stale AI-derived state so a refreshed album is not reviewed using old suggestions
 - video uploads can now expose duration, codec, frame rate, metadata source, and quality signal when the format is supported
 - existing JPEG-heavy albums can now backfill EXIF-derived metadata when the full album is opened
+- AI review responses now include first-pass best-pick candidates and duplicate-style grouping
+- newly uploaded videos can now attach sampled browser frames, so AI review is no longer limited to video metadata only
+- AI review responses now include a step-by-step reel plan with ordered beats, estimated timing, and edit guidance
+- AI review responses now include a downloadable reel draft JSON with caption, target output settings, step list, and source assets
+- cached AI review and description metadata are now persisted in `album.json` instead of living only in browser state
+- reel plans and reel draft exports now expose video clip windows so one strong video can drive multiple beats instead of every strong video being treated as a separate flat pick
+- reel draft exports now include a render-ready `render_spec` so the assembly flow is directly actionable even before `ffmpeg` execution is installed locally
+- the app can now execute that render spec into a saved output file when `ffmpeg` is present
 
 ### Operational note
 
@@ -147,10 +175,19 @@ Implemented in `apps/web`:
 
 - no guaranteed video thumbnail generation on this machine because `ffmpeg` is not installed here
 - no `ffprobe`-based video enrichment on this machine because `ffprobe` is not installed here
-- no duplicate grouping yet
+- older videos do not get browser-sampled AI frames automatically; this currently happens during new browser uploads
 - no semantic or taste-aware quality scoring yet beyond the new heuristic signal
-- no best-shot ranking yet
+- no semantic or taste-aware best-shot ranking yet beyond the new deterministic curation pass
 - no carousel or reel generation yet
+- reel logic now chooses one of:
+  - `hero_video`
+  - `multi_clip_sequence`
+  - `still_sequence`
+- this is still heuristic; it does not yet detect the best scene boundaries or extract clips with `ffmpeg`
+- the app now emits render commands, but it still does not execute them or produce a final video file
+- the app can now render a final preview file, but this machine still cannot do that in practice until `ffmpeg` is installed
+- rendered output is currently silent; source-audio reuse and soundtrack mixing are still pending
+- render attempts now log clearer API-side messages for request, failure, and success, which will help once real `ffmpeg` debugging starts
 - no live map update flow yet
 - no S3/R2 abstraction wired for production storage yet
 - no auth or multi-user support yet
@@ -159,11 +196,14 @@ Implemented in `apps/web`:
 
 1. Validate real video upload behavior in the browser with an actual `mp4` or `mov`.
 2. If needed, tighten any remaining new-album state leaks during real interaction.
-3. Improve travel-specific scene tagging beyond generic labels.
-4. Add ranking and grouping for near-duplicate shots.
-5. Start shaping “best picks” output for carousel vs reel candidates.
-6. Decide whether local `ffmpeg` / `ffprobe` installation is worth doing now for thumbnails and richer video reads.
-7. Start connecting GPS-bearing albums to the later map flow.
+3. Validate that sampled video frames improve AI review quality on real clips.
+4. Validate the cached AI review rehydration across a full page refresh with older albums.
+5. Validate the reel draft export against a few real mixed albums.
+6. Improve clip-window logic so `multi_clip_sequence` albums split across the best video moments more intelligently.
+7. Improve travel-specific scene tagging beyond generic labels.
+8. Improve the curation scoring so it reflects actual aesthetic quality better.
+9. Install or enable local `ffmpeg` / `ffprobe` so the new render action can run on this machine for real.
+10. Improve the render path with actual audio handling, not silent preview output.
 
 ## Working Rules For Future Changes
 
@@ -182,10 +222,21 @@ Implemented in `apps/web`:
 - validate album/media deletion UX
 - keep existing-album flow simple and low-friction
 - validate real video upload UX with common travel formats
+- validate browser video frame sampling on real travel clips
 - validate EXIF / GPS display with real phone photos
 - improve scene classification beyond generic labels
 - add richer metadata extraction
-- add ranking and grouping logic
+- validate ranking and grouping behavior with real travel albums
+- validate cached AI review persistence across reloads and older albums
+- validate the new reel-plan output with real albums and mixed media
+- validate the reel-draft export with real albums and mixed media
+- validate the new reel `render_spec` output with real albums and mixed media
+- improve reel selection so videos become:
+  - one chosen hero clip
+  - or a sequence of selected moments across multiple videos
+- validate the new `video_strategy` and clip-window output with real albums that contain 2+ strong videos
+- validate the real backend reel render step with installed `ffmpeg`
+- add audio handling to the reel render path
 - define the first “post candidate” output contract
 - start storage abstraction for local vs cloud backends
 

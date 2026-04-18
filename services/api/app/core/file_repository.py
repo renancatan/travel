@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import re
 import shutil
 from datetime import UTC, datetime
@@ -43,6 +44,9 @@ class FileRepository:
             "id": album_id,
             "name": name,
             "description": description,
+            "description_meta": None,
+            "cached_suggestion": None,
+            "rendered_reel": None,
             "created_at": _utc_now(),
             "updated_at": _utc_now(),
             "media_items": [],
@@ -84,6 +88,39 @@ class FileRepository:
             return None
 
         album["description"] = description.strip() if isinstance(description, str) and description.strip() else None
+        album["description_meta"] = None
+        album["cached_suggestion"] = None
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def save_description_meta(self, album_id: str, description_meta: dict[str, Any] | None) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        album["description_meta"] = description_meta
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def save_cached_suggestion(self, album_id: str, cached_suggestion: dict[str, Any] | None) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        album["cached_suggestion"] = cached_suggestion
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def save_rendered_reel(self, album_id: str, rendered_reel: dict[str, Any] | None) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        self._clear_rendered_reel_files(album)
+        album["rendered_reel"] = rendered_reel
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
@@ -110,6 +147,55 @@ class FileRepository:
             return updated_media_item
 
         return None
+
+    def save_media_analysis_frames(
+        self,
+        album_id: str,
+        media_id: str,
+        *,
+        frames: list[dict[str, Any]],
+        content_type: str,
+    ) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        media_items = album.get("media_items", [])
+        media_index = next((index for index, item in enumerate(media_items) if item.get("id") == media_id), None)
+        if media_index is None:
+            return None
+
+        media_item = media_items[media_index]
+        self._remove_relative_paths(media_item.get("analysis_frame_relative_paths") or [])
+
+        analysis_dir = self._album_dir(album_id) / "analysis" / media_id
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        extension = self._extension_for_content_type(content_type)
+
+        relative_paths: list[str] = []
+        timestamps: list[float] = []
+        for index, frame in enumerate(frames, start=1):
+            frame_filename = f"{media_id}-analysis-{index:02d}{extension}"
+            frame_path = analysis_dir / frame_filename
+            frame_path.write_bytes(frame["payload"])
+            relative_paths.append(str(frame_path.relative_to(self.storage_root)))
+            timestamps.append(round(float(frame["timestamp_seconds"]), 3))
+
+        updates = {
+            "analysis_frame_relative_paths": relative_paths,
+            "analysis_frame_timestamps_seconds": timestamps,
+            "analysis_frame_count": len(relative_paths),
+        }
+        if relative_paths and not media_item.get("thumbnail_relative_path"):
+            updates["thumbnail_relative_path"] = relative_paths[0]
+            updates["thumbnail_content_type"] = content_type
+
+        updated_media_item = self._normalize_media_item({**media_item, **updates})
+        album["media_items"][media_index] = updated_media_item
+        self._invalidate_cached_ai(album, clear_description_meta=True)
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return updated_media_item
 
     def refresh_album_media_metadata(self, album_id: str) -> dict[str, Any] | None:
         album = self.get_album(album_id)
@@ -175,6 +261,7 @@ class FileRepository:
         )
 
         album["media_items"].append(media_item)
+        self._invalidate_cached_ai(album, clear_description_meta=True)
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return media_item
@@ -199,16 +286,22 @@ class FileRepository:
             if thumbnail_path.exists():
                 thumbnail_path.unlink()
 
+        self._remove_relative_paths(media_item.get("analysis_frame_relative_paths") or [])
+
         album["media_items"] = [item for item in media_items if item.get("id") != media_id]
+        self._invalidate_cached_ai(album, clear_description_meta=True)
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
 
     def delete_album(self, album_id: str) -> bool:
+        album = self.get_album(album_id)
         album_dir = self._album_dir(album_id)
         if not album_dir.exists():
             return False
 
+        if album is not None:
+            self._clear_rendered_reel_files(album)
         shutil.rmtree(album_dir)
         return True
 
@@ -234,6 +327,19 @@ class FileRepository:
     def resolve_relative_path(self, relative_path: str) -> Path:
         return (self.storage_root / relative_path).resolve()
 
+    def _remove_relative_paths(self, relative_paths: list[str]) -> None:
+        for relative_path in relative_paths:
+            target_path = self.resolve_relative_path(str(relative_path))
+            if target_path.exists():
+                target_path.unlink()
+
+    @staticmethod
+    def _extension_for_content_type(content_type: str) -> str:
+        extension = mimetypes.guess_extension(content_type, strict=False)
+        if extension == ".jpe":
+            return ".jpg"
+        return extension or ".bin"
+
     @staticmethod
     def _sanitize_filename(filename: str) -> str:
         cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", filename).strip("._")
@@ -248,6 +354,9 @@ class FileRepository:
             "id": album.get("id"),
             "name": album.get("name", "Untitled album"),
             "description": album.get("description"),
+            "description_meta": album.get("description_meta"),
+            "cached_suggestion": album.get("cached_suggestion"),
+            "rendered_reel": album.get("rendered_reel"),
             "created_at": album.get("created_at", _utc_now()),
             "updated_at": album.get("updated_at", album.get("created_at", _utc_now())),
             "media_items": [self._normalize_media_item(item) for item in album.get("media_items", [])],
@@ -272,6 +381,9 @@ class FileRepository:
             "metadata_source": None,
             "thumbnail_relative_path": None,
             "thumbnail_content_type": None,
+            "analysis_frame_relative_paths": [],
+            "analysis_frame_timestamps_seconds": [],
+            "analysis_frame_count": 0,
             "media_score": None,
             "media_score_label": None,
             "detected_at": _utc_now(),
@@ -305,3 +417,27 @@ class FileRepository:
             )
 
         return media_item.get("media_score") is None
+
+    def _clear_rendered_reel_files(self, album: dict[str, Any]) -> None:
+        rendered_reel = album.get("rendered_reel")
+        if not isinstance(rendered_reel, dict):
+            album["rendered_reel"] = None
+            return
+
+        relative_path = str(rendered_reel.get("relative_path") or "").strip()
+        if not relative_path:
+            album["rendered_reel"] = None
+            return
+
+        render_path = self.resolve_relative_path(relative_path)
+        render_dir = render_path.parent
+        if render_dir.exists() and self.storage_root == render_dir.parent.parent:
+            shutil.rmtree(render_dir, ignore_errors=True)
+
+        album["rendered_reel"] = None
+
+    def _invalidate_cached_ai(self, album: dict[str, Any], *, clear_description_meta: bool) -> None:
+        album["cached_suggestion"] = None
+        self._clear_rendered_reel_files(album)
+        if clear_description_meta:
+            album["description_meta"] = None

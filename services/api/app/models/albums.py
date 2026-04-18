@@ -12,6 +12,15 @@ class UpdateAlbumRequest(BaseModel):
     description: str | None = Field(default=None, max_length=1000)
 
 
+class AnalysisFrameInput(BaseModel):
+    timestamp_seconds: float = Field(ge=0)
+    data_url: str = Field(min_length=32)
+
+
+class UploadAnalysisFramesRequest(BaseModel):
+    frames: list[AnalysisFrameInput] = Field(min_length=1, max_length=6)
+
+
 class MediaItemResponse(BaseModel):
     id: str
     album_id: str
@@ -35,16 +44,34 @@ class MediaItemResponse(BaseModel):
     metadata_source: str | None = None
     thumbnail_relative_path: str | None = None
     thumbnail_content_type: str | None = None
+    analysis_frame_count: int = 0
+    analysis_frame_timestamps_seconds: list[float] = Field(default_factory=list)
     media_score: float | None = None
     media_score_label: str | None = None
     detected_at: str
     created_at: str
 
 
+class RenderedReelResponse(BaseModel):
+    draft_name: str
+    relative_path: str
+    content_type: str
+    file_size_bytes: int
+    rendered_at: str
+    output_width: int
+    output_height: int
+    fps: int
+    estimated_total_duration_seconds: float
+    video_strategy: str
+
+
 class AlbumResponse(BaseModel):
     id: str
     name: str
     description: str | None
+    description_meta: dict | None = None
+    cached_suggestion: dict | None = None
+    rendered_reel: RenderedReelResponse | None = None
     created_at: str
     updated_at: str
     media_items: list[MediaItemResponse]
@@ -61,3 +88,8 @@ class GenerateAlbumDescriptionResponse(BaseModel):
     likely_categories: list[str]
     analysis_mode: str
     route: dict | None
+
+
+class RenderReelResponse(BaseModel):
+    album: AlbumResponse
+    rendered_reel: RenderedReelResponse

@@ -30,6 +30,11 @@
 - [ ] Group similar assets by time, location, and near-duplicates.
 - [ ] Score photos for quality and usefulness.
 - [ ] Score videos for reel potential and clip-worthy segments.
+- [ ] Change reel video logic so it does not just list all strong videos:
+  - pick one hero video when that is the best reel path
+  - or extract/select moments across multiple videos to build one reel
+- [x] Export a render-ready reel draft spec with clip windows and `ffmpeg` command planning.
+- [x] Add a real local reel render action plus preview/download flow.
 - [ ] Propose:
   - best photo shortlist
   - carousel set
@@ -45,6 +50,7 @@
 - [ ] Add vision-based scene/category suggestions such as cave, beach, bar, boat, city, food.
 - [ ] Add basic aesthetic ranking heuristics before personal-style learning.
 - [ ] Add clip extraction with `ffmpeg`.
+- [ ] Add real audio handling to the reel render path.
 - [ ] Normalize exports for social-ready output sizes and frame rates.
 - [ ] Keep all AI decisions explainable in the UI.
 - [ ] Log accept/reject feedback for future personalization.

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import base64
+import logging
+
 from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 
 from services.api.app.core.album_suggestions import AlbumSuggestionService
 from services.api.app.core.file_repository import FileRepository
 from services.api.app.core.media_metadata import build_media_metadata, enrich_saved_media_metadata
+from services.api.app.core.reel_renderer import ReelRenderError, ReelRenderer
 from services.api.app.models.albums import (
     AlbumResponse,
+    MediaItemResponse,
+    UploadAnalysisFramesRequest,
     CreateAlbumRequest,
     GenerateAlbumDescriptionResponse,
+    RenderReelResponse,
     UpdateAlbumRequest,
     UploadMediaResponse,
 )
@@ -18,6 +25,8 @@ from services.api.app.models.suggestions import AlbumSuggestionResponse
 router = APIRouter(prefix="/albums", tags=["albums"])
 repository = FileRepository()
 suggestion_service = AlbumSuggestionService()
+reel_renderer = ReelRenderer()
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=list[AlbumResponse])
@@ -97,6 +106,63 @@ def get_media_thumbnail(album_id: str, media_id: str) -> FileResponse:
     )
 
 
+@router.get("/{album_id}/rendered-reel/content")
+def get_rendered_reel_content(album_id: str) -> FileResponse:
+    album = repository.get_album(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    rendered_reel = album.get("rendered_reel")
+    if not isinstance(rendered_reel, dict):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered reel not found.")
+
+    relative_path = str(rendered_reel.get("relative_path") or "").strip()
+    if not relative_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered reel not found.")
+
+    output_path = repository.resolve_relative_path(relative_path)
+    if not output_path.exists():
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered reel file not found.")
+
+    return FileResponse(
+        path=output_path,
+        media_type=rendered_reel.get("content_type") or "video/mp4",
+        filename=output_path.name,
+    )
+
+
+@router.post("/{album_id}/media/{media_id}/analysis-frames", response_model=MediaItemResponse)
+def upload_media_analysis_frames(album_id: str, media_id: str, request: UploadAnalysisFramesRequest) -> dict:
+    media_item = repository.get_media_item(album_id, media_id)
+    if media_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found.")
+    if media_item.get("media_kind") != "video":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Analysis frames only apply to video items.")
+
+    decoded_frames: list[dict[str, object]] = []
+    frame_content_type: str | None = None
+    for frame in request.frames:
+        content_type, payload = _decode_image_data_url(frame.data_url)
+        if frame_content_type is None:
+            frame_content_type = content_type
+        decoded_frames.append(
+            {
+                "timestamp_seconds": frame.timestamp_seconds,
+                "payload": payload,
+            }
+        )
+
+    updated_media_item = repository.save_media_analysis_frames(
+        album_id,
+        media_id,
+        frames=decoded_frames,
+        content_type=frame_content_type or "image/jpeg",
+    )
+    if updated_media_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found.")
+    return updated_media_item
+
+
 @router.delete("/{album_id}/media/{media_id}", response_model=AlbumResponse)
 def delete_media_item(album_id: str, media_id: str) -> dict:
     if repository.get_album(album_id) is None:
@@ -117,7 +183,58 @@ def generate_album_suggestions(album_id: str) -> dict:
     if not album.get("media_items"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Album has no media items yet.")
 
-    return suggestion_service.generate(album)
+    suggestion = suggestion_service.generate(album)
+    repository.save_cached_suggestion(album_id, suggestion)
+    return suggestion
+
+
+@router.post("/{album_id}/rendered-reel", response_model=RenderReelResponse)
+def render_album_reel(album_id: str) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    logger.info("Render reel requested album_id=%s album_name=%s", album_id, album.get("name"))
+
+    cached_suggestion = album.get("cached_suggestion")
+    if not isinstance(cached_suggestion, dict):
+        logger.warning("Render reel blocked album_id=%s reason=no_cached_suggestion", album_id)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Run AI review before rendering a reel.")
+
+    reel_draft = cached_suggestion.get("reel_draft")
+    render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
+    if not isinstance(render_spec, dict):
+        logger.info("Upgrading cached suggestion before render album_id=%s", album_id)
+        cached_suggestion = suggestion_service.upgrade_cached_suggestion(album, cached_suggestion)
+        repository.save_cached_suggestion(album_id, cached_suggestion)
+        album = repository.get_album(album_id) or album
+        reel_draft = cached_suggestion.get("reel_draft")
+        render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
+
+    if not isinstance(reel_draft, dict) or not isinstance(render_spec, dict):
+        logger.warning("Render reel blocked album_id=%s reason=no_renderable_draft", album_id)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This album does not have a renderable reel draft yet.")
+
+    try:
+        rendered_reel = reel_renderer.render_draft(reel_draft)
+    except ReelRenderError as exc:
+        logger.warning("Render reel failed album_id=%s reason=%s", album_id, str(exc))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    updated_album = repository.save_rendered_reel(album_id, rendered_reel)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    logger.info(
+        "Render reel finished album_id=%s output=%s",
+        album_id,
+        rendered_reel.get("relative_path"),
+    )
+
+    return {
+        "album": updated_album,
+        "rendered_reel": rendered_reel,
+    }
 
 
 @router.post("/{album_id}/description/auto", response_model=GenerateAlbumDescriptionResponse)
@@ -133,6 +250,14 @@ def generate_album_description(album_id: str) -> dict:
     updated_album = repository.update_album(album_id, description=description_data["description"])
     if updated_album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    updated_album = repository.save_description_meta(
+        album_id,
+        {
+            "likely_categories": description_data["likely_categories"],
+            "analysis_mode": description_data["analysis_mode"],
+            "route": description_data["route"],
+        },
+    ) or updated_album
 
     return {
         "album": updated_album,
@@ -181,3 +306,26 @@ async def upload_media(
     album = repository.get_album(album_id)
     response.headers["Location"] = f"/albums/{album_id}"
     return {"album": album, "media_item": media_item}
+
+
+def _decode_image_data_url(data_url: str) -> tuple[str, bytes]:
+    if not data_url.startswith("data:") or "," not in data_url:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid data URL.")
+
+    header, encoded = data_url.split(",", 1)
+    if ";base64" not in header:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Analysis frames must be base64-encoded.")
+
+    content_type = header[5:].split(";", 1)[0].strip().lower()
+    if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported frame image type.")
+
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid frame payload.") from exc
+
+    if not payload:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty frame payload.")
+
+    return content_type, payload
