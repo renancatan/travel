@@ -39,6 +39,7 @@ class AlbumSuggestionService:
         self.gemini_client = genai.Client(api_key=self.gemini_api_key) if self.gemini_api_key and genai else None
         self.local_storage_root = settings.local_storage_root
         self.storage_root = Path(settings.local_storage_root).expanduser().resolve()
+        self.max_reel_clip_duration_seconds = float(settings.max_reel_clip_duration_seconds)
 
     def generate(self, album: dict[str, Any]) -> dict[str, Any]:
         multimodal_parts = self._build_multimodal_parts(album) if self.gemini_client and types else []
@@ -419,6 +420,139 @@ class AlbumSuggestionService:
             ),
             "shot_groups": shot_groups,
         }
+
+    def rebuild_reel_draft(
+        self,
+        album: dict[str, Any],
+        edited_draft: dict[str, Any],
+        *,
+        existing_draft: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        media_by_id = {item["id"]: item for item in album.get("media_items", [])}
+        raw_steps = edited_draft.get("steps") or []
+        if not isinstance(raw_steps, list) or not raw_steps:
+            raise ValueError("The edited reel draft does not include any steps.")
+
+        draft_steps: list[dict[str, Any]] = []
+        video_use_counts: dict[str, int] = {}
+
+        for index, raw_step in enumerate(raw_steps, start=1):
+            media_id = str(raw_step.get("media_id") or "").strip()
+            media_item = media_by_id.get(media_id)
+            if media_item is None:
+                raise ValueError(f"Draft step {index} points to media that is not in this album.")
+
+            role = str(raw_step.get("role") or f"Step {index}").strip() or "Beat"
+            media_kind = str(media_item.get("media_kind") or "unknown")
+            source_role = str(raw_step.get("source_role") or "").strip()
+            edit_instruction = str(raw_step.get("edit_instruction") or "").strip()
+            why = str(raw_step.get("why") or "").strip()
+
+            if media_kind == "video":
+                clip_start_seconds = self._to_float(raw_step.get("clip_start_seconds"))
+                clip_end_seconds = self._to_float(raw_step.get("clip_end_seconds"))
+                usage_index = video_use_counts.get(media_id, 0)
+                clip_start_seconds, clip_end_seconds = self._normalize_video_window(
+                    media_item,
+                    role=role,
+                    clip_start_seconds=clip_start_seconds,
+                    clip_end_seconds=clip_end_seconds,
+                    usage_index=usage_index,
+                )
+                video_use_counts[media_id] = usage_index + 1
+                suggested_duration_seconds = round(max(0.3, clip_end_seconds - clip_start_seconds), 1)
+                selection_mode = "video_clip"
+                normalized_source_role = source_role or ("hero_video" if index == 1 else "supporting_video")
+            else:
+                clip_start_seconds = None
+                clip_end_seconds = None
+                suggested_duration_seconds = round(
+                    min(
+                        self.max_reel_clip_duration_seconds,
+                        max(0.5, float(raw_step.get("suggested_duration_seconds") or self._suggest_reel_step_duration(media_item, role=role))),
+                    ),
+                    1,
+                )
+                selection_mode = "full_frame"
+                normalized_source_role = source_role or "still_image"
+
+            draft_steps.append(
+                {
+                    "step_number": index,
+                    "role": role,
+                    "media_id": media_id,
+                    "original_filename": media_item.get("original_filename") or media_id,
+                    "media_kind": media_kind,
+                    "has_audio": media_item.get("has_audio"),
+                    "source_role": normalized_source_role,
+                    "selection_mode": selection_mode,
+                    "clip_start_seconds": clip_start_seconds,
+                    "clip_end_seconds": clip_end_seconds,
+                    "relative_path": media_item.get("relative_path", ""),
+                    "suggested_duration_seconds": suggested_duration_seconds,
+                    "edit_instruction": edit_instruction or self._build_reel_step_instruction(media_item, role=role),
+                    "why": why or "Edited manually before render.",
+                }
+            )
+
+        asset_ids: list[str] = []
+        cover_media_id = str(edited_draft.get("cover_media_id") or "").strip()
+        if cover_media_id and cover_media_id in media_by_id:
+            asset_ids.append(cover_media_id)
+        for step in draft_steps:
+            if step["media_id"] not in asset_ids:
+                asset_ids.append(step["media_id"])
+
+        assets: list[dict[str, Any]] = []
+        for media_id in asset_ids:
+            media_item = media_by_id.get(media_id)
+            if media_item is None:
+                continue
+            assets.append(
+                {
+                    "media_id": media_id,
+                    "original_filename": media_item.get("original_filename") or media_id,
+                    "media_kind": media_item.get("media_kind", "unknown"),
+                    "content_type": media_item.get("content_type", "application/octet-stream"),
+                    "relative_path": media_item.get("relative_path", ""),
+                    "thumbnail_relative_path": media_item.get("thumbnail_relative_path"),
+                }
+            )
+
+        derived_video_strategy = self._derive_video_strategy_from_steps(draft_steps)
+        title = (
+            str(edited_draft.get("title") or "").strip()
+            or str(existing_draft.get("title") if isinstance(existing_draft, dict) else "").strip()
+            or self._build_reel_title(album, caption_ideas=[])
+        )
+        caption = (
+            str(edited_draft.get("caption") or "").strip()
+            or str(existing_draft.get("caption") if isinstance(existing_draft, dict) else "").strip()
+            or album.get("description")
+            or title
+        )
+        draft_name = (
+            str(existing_draft.get("draft_name") if isinstance(existing_draft, dict) else "").strip()
+            or f"{self._slugify(str(album.get('name') or title))}-reel-draft"
+        )
+        normalized_cover_media_id = cover_media_id if cover_media_id in media_by_id else draft_steps[0]["media_id"]
+
+        reel_draft = {
+            "draft_name": draft_name,
+            "title": title,
+            "caption": caption,
+            "cover_media_id": normalized_cover_media_id,
+            "video_strategy": derived_video_strategy,
+            "estimated_total_duration_seconds": round(sum(step["suggested_duration_seconds"] for step in draft_steps), 1),
+            "output_width": 1080,
+            "output_height": 1920,
+            "fps": 30,
+            "audio_strategy": "preserve source audio on video beats when available; use silent audio for still-image beats or silent clips",
+            "steps": draft_steps,
+            "assets": assets,
+        }
+        reel_draft["render_spec"] = self._build_reel_render_spec(reel_draft)
+        return reel_draft
 
     def _append_video_frame_parts(
         self,
@@ -807,6 +941,7 @@ class AlbumSuggestionService:
                     "media_id": media_id,
                     "original_filename": media_item.get("original_filename") or media_id,
                     "media_kind": media_item.get("media_kind", "unknown"),
+                    "has_audio": media_item.get("has_audio"),
                     "source_role": str(step.get("source_role") or "still_image"),
                     "selection_mode": str(step.get("selection_mode") or "full_frame"),
                     "clip_start_seconds": self._to_float(step.get("clip_start_seconds")),
@@ -834,12 +969,61 @@ class AlbumSuggestionService:
             "output_width": 1080,
             "output_height": 1920,
             "fps": 30,
-            "audio_strategy": "silent preview render for now; soundtrack and source-audio mixing come next",
+            "audio_strategy": "preserve source audio on video beats when available; use silent audio for still-image beats or silent clips",
             "steps": draft_steps,
             "assets": assets,
         }
         reel_draft["render_spec"] = self._build_reel_render_spec(reel_draft)
         return reel_draft
+
+    @staticmethod
+    def _derive_video_strategy_from_steps(steps: list[dict[str, Any]]) -> str:
+        video_media_ids = {str(step.get("media_id") or "") for step in steps if step.get("media_kind") == "video"}
+        if len(video_media_ids) >= 2:
+            return "multi_clip_sequence"
+        if len(video_media_ids) == 1:
+            return "hero_video"
+        return "still_sequence"
+
+    def _normalize_video_window(
+        self,
+        media_item: dict[str, Any],
+        *,
+        role: str,
+        clip_start_seconds: float | None,
+        clip_end_seconds: float | None,
+        usage_index: int,
+    ) -> tuple[float, float]:
+        duration_seconds = self._to_float(media_item.get("duration_seconds"))
+        if clip_start_seconds is None or clip_end_seconds is None or clip_end_seconds <= clip_start_seconds:
+            default_start, default_end = self._select_video_clip_window(
+                media_item,
+                role=role,
+                usage_index=usage_index,
+            )
+            clip_start_seconds = default_start
+            clip_end_seconds = default_end
+
+        clip_start_seconds = max(0.0, round(float(clip_start_seconds), 1))
+        clip_end_seconds = round(float(clip_end_seconds), 1)
+        max_clip_duration_seconds = max(0.5, round(self.max_reel_clip_duration_seconds, 1))
+
+        if duration_seconds is not None:
+            max_start = max(duration_seconds - 0.3, 0.0)
+            clip_start_seconds = min(clip_start_seconds, max_start)
+            clip_end_seconds = min(clip_end_seconds, duration_seconds)
+
+        clip_end_seconds = min(clip_end_seconds, round(clip_start_seconds + max_clip_duration_seconds, 1))
+
+        if clip_end_seconds <= clip_start_seconds:
+            clip_end_seconds = round(clip_start_seconds + 0.5, 1)
+            if duration_seconds is not None:
+                clip_end_seconds = min(clip_end_seconds, duration_seconds)
+                if clip_end_seconds <= clip_start_seconds:
+                    clip_start_seconds = max(0.0, round(duration_seconds - 0.5, 1))
+                    clip_end_seconds = round(duration_seconds, 1)
+
+        return clip_start_seconds, clip_end_seconds
 
     @staticmethod
     def _merge_plan_candidates(*candidate_sets: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -875,6 +1059,7 @@ class AlbumSuggestionService:
             clip_end_seconds = self._to_float(step.get("clip_end_seconds"))
             output_duration_seconds = round(float(step.get("suggested_duration_seconds") or 0.0), 1)
             render_mode = "video_trim" if media_kind == "video" else "image_hold"
+            has_audio = bool(step.get("has_audio")) if media_kind == "video" else False
 
             clips.append(
                 {
@@ -897,6 +1082,7 @@ class AlbumSuggestionService:
                     source_relative_path=source_relative,
                     output_relative_path=output_relative,
                     media_kind=media_kind,
+                    has_audio=has_audio,
                     output_duration_seconds=output_duration_seconds,
                     clip_start_seconds=clip_start_seconds,
                     clip_end_seconds=clip_end_seconds,
@@ -911,14 +1097,16 @@ class AlbumSuggestionService:
         shell_commands.append(
             "ffmpeg -y "
             f"-f concat -safe 0 -i {self._shell_quote(concat_relative_path)} "
-            "-an -c:v libx264 -pix_fmt yuv420p -movflags +faststart "
+            "-map 0:v:0 -map 0:a:0 "
+            "-c:v libx264 -pix_fmt yuv420p -c:a aac -ar 48000 -ac 2 -movflags +faststart "
             f"{self._shell_quote(output_relative_path)}"
         )
 
         notes = [
             "This is a render-ready spec for the future reel worker.",
             "Each step first becomes a normalized 1080x1920 clip, then the clips are concatenated.",
-            "The current render path produces a silent preview reel; audio mixing has not been implemented yet.",
+            "Video beats can preserve source audio when it exists; still-image beats use silent filler audio.",
+            "A richer soundtrack and audio-mixing layer has not been implemented yet.",
         ]
         if not backend_available:
             notes.append("ffmpeg is not installed on this machine right now, so these commands are generated but not executed locally.")
@@ -940,6 +1128,7 @@ class AlbumSuggestionService:
         source_relative_path: str,
         output_relative_path: str,
         media_kind: str,
+        has_audio: bool,
         output_duration_seconds: float,
         clip_start_seconds: float | None,
         clip_end_seconds: float | None,
@@ -955,19 +1144,32 @@ class AlbumSuggestionService:
                 timing_prefix += f"-ss {clip_start_seconds:.2f} "
             if clip_end_seconds is not None:
                 timing_prefix += f"-to {clip_end_seconds:.2f} "
+            if has_audio:
+                return (
+                    "ffmpeg -y "
+                    f"{timing_prefix}-i {self._shell_quote(source_relative_path)} "
+                    f"-vf {self._shell_quote(vf_chain)} "
+                    "-map 0:v:0 -map 0:a:0 "
+                    "-c:v libx264 -pix_fmt yuv420p -c:a aac -ar 48000 -ac 2 -shortest "
+                    f"{self._shell_quote(output_relative_path)}"
+                )
             return (
                 "ffmpeg -y "
                 f"{timing_prefix}-i {self._shell_quote(source_relative_path)} "
+                f"-f lavfi -t {output_duration_seconds:.1f} -i anullsrc=channel_layout=stereo:sample_rate=48000 "
                 f"-vf {self._shell_quote(vf_chain)} "
-                "-an -c:v libx264 -pix_fmt yuv420p "
+                "-map 0:v:0 -map 0:a? -map 1:a:0 "
+                "-c:v libx264 -pix_fmt yuv420p -c:a aac -ar 48000 -ac 2 -shortest "
                 f"{self._shell_quote(output_relative_path)}"
             )
 
         return (
             "ffmpeg -y "
             f"-loop 1 -t {output_duration_seconds:.1f} -i {self._shell_quote(source_relative_path)} "
+            f"-f lavfi -t {output_duration_seconds:.1f} -i anullsrc=channel_layout=stereo:sample_rate=48000 "
             f"-vf {self._shell_quote(vf_chain)} "
-            "-an -c:v libx264 -pix_fmt yuv420p "
+            "-map 0:v:0 -map 1:a:0 "
+            "-c:v libx264 -pix_fmt yuv420p -c:a aac -ar 48000 -ac 2 -shortest "
             f"{self._shell_quote(output_relative_path)}"
         )
 

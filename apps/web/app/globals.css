@@ -653,6 +653,63 @@ button {
   max-width: 48%;
 }
 
+.draft-input {
+  padding: 10px 12px;
+}
+
+.draft-textarea {
+  min-height: 120px;
+}
+
+.draft-step-list {
+  display: grid;
+  gap: 12px;
+}
+
+.draft-step-editor {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.draft-step-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.draft-step-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.draft-field {
+  display: grid;
+  gap: 6px;
+}
+
+.draft-field span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.draft-step-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.draft-step-meta em {
+  font-style: normal;
+}
+
 .command-details {
   margin-top: 12px;
   border: 1px solid var(--line);
@@ -845,6 +902,12 @@ button {
     flex-direction: column;
   }
 
+  .draft-step-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .draft-step-header,
+  .draft-step-meta,
   .reel-plan-header,
   .reel-plan-step-header {
     flex-direction: column;

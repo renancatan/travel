@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import logging
 
-from fastapi import APIRouter, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, Body, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 
 from services.api.app.core.album_suggestions import AlbumSuggestionService
@@ -17,6 +17,7 @@ from services.api.app.models.albums import (
     CreateAlbumRequest,
     GenerateAlbumDescriptionResponse,
     RenderReelResponse,
+    UpdateReelDraftRequest,
     UpdateAlbumRequest,
     UploadMediaResponse,
 )
@@ -122,13 +123,23 @@ def get_rendered_reel_content(album_id: str) -> FileResponse:
 
     output_path = repository.resolve_relative_path(relative_path)
     if not output_path.exists():
+        logger.warning(
+            "Rendered reel file missing on disk album_id=%s relative_path=%s; clearing stale metadata",
+            album_id,
+            relative_path,
+        )
+        repository.save_rendered_reel(album_id, None)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered reel file not found.")
 
-    return FileResponse(
+    response = FileResponse(
         path=output_path,
         media_type=rendered_reel.get("content_type") or "video/mp4",
         filename=output_path.name,
     )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @router.post("/{album_id}/media/{media_id}/analysis-frames", response_model=MediaItemResponse)
@@ -188,27 +199,47 @@ def generate_album_suggestions(album_id: str) -> dict:
     return suggestion
 
 
+@router.post("/{album_id}/reel-draft", response_model=AlbumResponse)
+def update_album_reel_draft(album_id: str, request: UpdateReelDraftRequest) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
+    reel_draft = suggestion_service.rebuild_reel_draft(
+        album,
+        request.reel_draft.model_dump(),
+        existing_draft=cached_suggestion.get("reel_draft"),
+    )
+    cached_suggestion["reel_draft"] = reel_draft
+    updated_album = repository.save_cached_suggestion(album_id, cached_suggestion)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
+
+
 @router.post("/{album_id}/rendered-reel", response_model=RenderReelResponse)
-def render_album_reel(album_id: str) -> dict:
+def render_album_reel(album_id: str, request: UpdateReelDraftRequest | None = Body(default=None)) -> dict:
     album = repository.refresh_album_media_metadata(album_id)
     if album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
 
     logger.info("Render reel requested album_id=%s album_name=%s", album_id, album.get("name"))
 
-    cached_suggestion = album.get("cached_suggestion")
-    if not isinstance(cached_suggestion, dict):
-        logger.warning("Render reel blocked album_id=%s reason=no_cached_suggestion", album_id)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Run AI review before rendering a reel.")
-
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
     reel_draft = cached_suggestion.get("reel_draft")
     render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
-    if not isinstance(render_spec, dict):
-        logger.info("Upgrading cached suggestion before render album_id=%s", album_id)
-        cached_suggestion = suggestion_service.upgrade_cached_suggestion(album, cached_suggestion)
+
+    if request is not None:
+        logger.info("Applying edited reel draft before render album_id=%s", album_id)
+        reel_draft = suggestion_service.rebuild_reel_draft(
+            album,
+            request.reel_draft.model_dump(),
+            existing_draft=reel_draft if isinstance(reel_draft, dict) else None,
+        )
+        cached_suggestion["reel_draft"] = reel_draft
         repository.save_cached_suggestion(album_id, cached_suggestion)
         album = repository.get_album(album_id) or album
-        reel_draft = cached_suggestion.get("reel_draft")
         render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
 
     if not isinstance(reel_draft, dict) or not isinstance(render_spec, dict):
@@ -329,3 +360,25 @@ def _decode_image_data_url(data_url: str) -> tuple[str, bytes]:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty frame payload.")
 
     return content_type, payload
+
+
+def _get_renderable_cached_suggestion(album_id: str, album: dict) -> dict:
+    cached_suggestion = album.get("cached_suggestion")
+    if not isinstance(cached_suggestion, dict):
+        logger.warning("Render reel blocked album_id=%s reason=no_cached_suggestion", album_id)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Run AI review before rendering a reel.")
+
+    reel_draft = cached_suggestion.get("reel_draft")
+    render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
+    if not isinstance(render_spec, dict):
+        logger.info("Upgrading cached suggestion before render album_id=%s", album_id)
+        cached_suggestion = suggestion_service.upgrade_cached_suggestion(album, cached_suggestion)
+        repository.save_cached_suggestion(album_id, cached_suggestion)
+
+    reel_draft = cached_suggestion.get("reel_draft")
+    render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
+    if not isinstance(reel_draft, dict) or not isinstance(render_spec, dict):
+        logger.warning("Render reel blocked album_id=%s reason=no_renderable_draft", album_id)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This album does not have a renderable reel draft yet.")
+
+    return cached_suggestion

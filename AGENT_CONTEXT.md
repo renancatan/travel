@@ -59,7 +59,8 @@ Review and AI analysis:
 - ranked cover, carousel, and reel candidates
 - a first-pass reel plan with ordered beats, suggested durations, and edit notes
 - a downloadable reel draft manifest with caption, output settings, steps, selected assets, and a render-ready `ffmpeg` spec
-- a local reel render action that can produce a saved preview/download when `ffmpeg` is available
+- a local reel render action that can produce a saved preview/download with preserved source audio on video beats when `ffmpeg` is available
+- a first-pass manual reel editor that can reorder beats, swap assets, edit title/caption/cover, and adjust clip windows or durations before save/render
 
 ## What Has Been Built
 
@@ -87,6 +88,7 @@ Implemented in `services/api`:
 - `GET /albums/{album_id}/media/{media_id}/thumbnail`
 - `POST /albums/{album_id}/description/auto`
 - `POST /albums/{album_id}/suggestions`
+- `POST /albums/{album_id}/reel-draft`
 
 Current backend capabilities:
 
@@ -103,6 +105,7 @@ Current backend capabilities:
 - reel plans now choose a `video_strategy` (`hero_video`, `multi_clip_sequence`, or `still_sequence`) and attach clip windows to video beats
 - reel drafts now include a render-ready `ffmpeg` spec with working directory, concat file, normalized clip outputs, and copyable shell commands
 - a reel renderer now turns that render spec into a saved `.mp4` preview/download when `ffmpeg` is available
+- rendered reels now preserve source audio on video beats and use silent filler audio for still-image beats or silent clips
 - duplicate-style shot grouping based on filename/media patterns
 - Gemini-backed LLM routing reused from the sibling analytics project
 - multimodal image-aware suggestion path for supported raster images
@@ -139,6 +142,8 @@ Implemented in `apps/web`:
 - API smoke test passes
 - Next.js production build passes
 - album creation, upload, description generation, description save, and AI review all work end to end
+- local reel rendering now works end to end on this machine with installed `ffmpeg`
+- local reel rendering now exports a final `.mp4` with both H.264 video and AAC audio when the draft includes video beats
 
 ### Recently fixed
 
@@ -164,6 +169,13 @@ Implemented in `apps/web`:
 - reel plans and reel draft exports now expose video clip windows so one strong video can drive multiple beats instead of every strong video being treated as a separate flat pick
 - reel draft exports now include a render-ready `render_spec` so the assembly flow is directly actionable even before `ffmpeg` execution is installed locally
 - the app can now execute that render spec into a saved output file when `ffmpeg` is present
+- the final concat render now explicitly maps both video and audio, so rendered reels keep the expected AAC track instead of dropping back to silent output
+- duplicate image filenames no longer appear twice on media cards
+- reel drafts can now be edited in the UI, saved back to album cache, and rendered from the edited version
+- re-rendering an edited reel now uses a staging directory and no longer deletes the newly rendered output when the final saved path is unchanged
+- stale rendered-reel metadata is now cleared automatically if the UI asks for a file that no longer exists on disk
+- rendered-reel preview and download now include a cache-busting URL tied to `rendered_at`, and the backend serves that content with `no-store` headers so browsers stop reusing old reel bytes after re-render
+- manual reel editing now clamps video clip windows and durations to the smaller of the real asset duration and the backend-configured max clip cap, so the editor no longer allows values that later fail at render time
 
 ### Operational note
 
@@ -173,8 +185,6 @@ Implemented in `apps/web`:
 
 ## Known Gaps
 
-- no guaranteed video thumbnail generation on this machine because `ffmpeg` is not installed here
-- no `ffprobe`-based video enrichment on this machine because `ffprobe` is not installed here
 - older videos do not get browser-sampled AI frames automatically; this currently happens during new browser uploads
 - no semantic or taste-aware quality scoring yet beyond the new heuristic signal
 - no semantic or taste-aware best-shot ranking yet beyond the new deterministic curation pass
@@ -184,10 +194,15 @@ Implemented in `apps/web`:
   - `multi_clip_sequence`
   - `still_sequence`
 - this is still heuristic; it does not yet detect the best scene boundaries or extract clips with `ffmpeg`
-- the app now emits render commands, but it still does not execute them or produce a final video file
-- the app can now render a final preview file, but this machine still cannot do that in practice until `ffmpeg` is installed
-- rendered output is currently silent; source-audio reuse and soundtrack mixing are still pending
+- real local reel rendering is now validated with `ffmpeg` and `ffprobe`
+- rendered output now preserves source audio on video beats and uses silent filler audio elsewhere; richer soundtrack and audio-mixing behavior are still pending
 - render attempts now log clearer API-side messages for request, failure, and success, which will help once real `ffmpeg` debugging starts
+- manual reel editing is still first-pass:
+  - reorder beats
+  - swap assets per beat
+  - adjust clip windows and durations
+  - edit title, caption, and cover
+- the editor does not yet support add/remove beats, drag-and-drop reordering, or multiple saved draft versions
 - no live map update flow yet
 - no S3/R2 abstraction wired for production storage yet
 - no auth or multi-user support yet
@@ -199,11 +214,12 @@ Implemented in `apps/web`:
 3. Validate that sampled video frames improve AI review quality on real clips.
 4. Validate the cached AI review rehydration across a full page refresh with older albums.
 5. Validate the reel draft export against a few real mixed albums.
-6. Improve clip-window logic so `multi_clip_sequence` albums split across the best video moments more intelligently.
-7. Improve travel-specific scene tagging beyond generic labels.
-8. Improve the curation scoring so it reflects actual aesthetic quality better.
-9. Install or enable local `ffmpeg` / `ffprobe` so the new render action can run on this machine for real.
-10. Improve the render path with actual audio handling, not silent preview output.
+6. Re-test manual draft edits plus re-render on real albums to confirm preview and download always use the newest reel bytes after clip-window changes.
+7. Improve clip-window logic so `multi_clip_sequence` albums split across the best video moments more intelligently.
+8. Improve travel-specific scene tagging beyond generic labels.
+9. Improve the curation scoring so it reflects actual aesthetic quality better.
+10. Improve audio handling beyond simple source-audio preservation: soundtrack selection, gain control, and mix rules.
+11. Expand the reel editor with add/remove beats, drag-and-drop reordering, and alternate saved versions.
 
 ## Working Rules For Future Changes
 
@@ -231,12 +247,14 @@ Implemented in `apps/web`:
 - validate the new reel-plan output with real albums and mixed media
 - validate the reel-draft export with real albums and mixed media
 - validate the new reel `render_spec` output with real albums and mixed media
+- validate rendered reel quality with real albums and mixed media
 - improve reel selection so videos become:
   - one chosen hero clip
   - or a sequence of selected moments across multiple videos
 - validate the new `video_strategy` and clip-window output with real albums that contain 2+ strong videos
-- validate the real backend reel render step with installed `ffmpeg`
-- add audio handling to the reel render path
+- improve rendered reel quality now that the real backend render step is validated
+- improve source-audio handling with soundtrack support and mixing controls
+- expand manual reel editing beyond the first pass
 - define the first “post candidate” output contract
 - start storage abstraction for local vs cloud backends
 

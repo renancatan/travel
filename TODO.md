@@ -35,12 +35,16 @@
   - or extract/select moments across multiple videos to build one reel
 - [x] Export a render-ready reel draft spec with clip windows and `ffmpeg` command planning.
 - [x] Add a real local reel render action plus preview/download flow.
+- [x] Validate real local reel rendering with installed `ffmpeg`.
+- [x] Preserve source audio on video beats during local reel rendering, with silent filler audio for still-image beats.
+- [x] Make re-rendering safe when edited drafts reuse the same saved output path.
+- [x] Clamp manual video clip editing to the smaller of the real asset duration and the configured reel clip cap.
 - [ ] Propose:
   - best photo shortlist
   - carousel set
   - short reel cut
   - story set
-- [ ] Let the user approve, reject, reorder, and remove assets.
+- [ ] Let the user approve, reject, and remove assets.
 - [ ] Generate caption options and hashtags.
 - [ ] Let the user choose "publish later" or "map only".
 - [ ] Update the map entry once the user confirms the final selection.
@@ -50,11 +54,23 @@
 - [ ] Add vision-based scene/category suggestions such as cave, beach, bar, boat, city, food.
 - [ ] Add basic aesthetic ranking heuristics before personal-style learning.
 - [ ] Add clip extraction with `ffmpeg`.
-- [ ] Add real audio handling to the reel render path.
+- [ ] Add soundtrack selection and audio-mixing controls on top of the current source-audio-preserving render path.
+- [x] Add first-pass manual reel editing controls:
+  - reorder beats
+  - swap chosen assets
+  - adjust clip windows
+- [ ] Expand manual reel editing:
+  - add/remove beats
+  - drag-and-drop reorder
+  - save alternate draft versions
 - [ ] Normalize exports for social-ready output sizes and frame rates.
 - [ ] Keep all AI decisions explainable in the UI.
 - [ ] Log accept/reject feedback for future personalization.
 - [ ] Do not fine-tune or train on personal taste in v1.
+
+## Small UI fixes
+
+- [x] Fix duplicate image filename display on media cards.
 
 ## Phase 4: Map Experience
 

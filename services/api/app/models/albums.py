@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-
 class CreateAlbumRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
@@ -19,6 +18,28 @@ class AnalysisFrameInput(BaseModel):
 
 class UploadAnalysisFramesRequest(BaseModel):
     frames: list[AnalysisFrameInput] = Field(min_length=1, max_length=6)
+
+
+class ReelDraftEditStepInput(BaseModel):
+    role: str = Field(min_length=1, max_length=60)
+    media_id: str = Field(min_length=1, max_length=120)
+    source_role: str | None = Field(default=None, max_length=60)
+    suggested_duration_seconds: float = Field(gt=0)
+    clip_start_seconds: float | None = Field(default=None, ge=0)
+    clip_end_seconds: float | None = Field(default=None, ge=0)
+    edit_instruction: str | None = Field(default=None, max_length=300)
+    why: str | None = Field(default=None, max_length=500)
+
+
+class ReelDraftEditInput(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    caption: str | None = Field(default=None, max_length=2200)
+    cover_media_id: str | None = Field(default=None, max_length=120)
+    steps: list[ReelDraftEditStepInput] = Field(min_length=1, max_length=12)
+
+
+class UpdateReelDraftRequest(BaseModel):
+    reel_draft: ReelDraftEditInput
 
 
 class MediaItemResponse(BaseModel):

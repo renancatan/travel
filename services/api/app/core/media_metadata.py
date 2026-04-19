@@ -32,6 +32,7 @@ def build_media_metadata(
     duration_seconds: float | None = None
     frame_rate: float | None = None
     video_codec: str | None = None
+    has_audio: bool | None = None
     captured_at: str | None = None
     source_device: str | None = None
     gps: dict[str, Any] | None = None
@@ -58,6 +59,7 @@ def build_media_metadata(
         duration_seconds = video_metadata.get("duration_seconds")
         frame_rate = video_metadata.get("frame_rate")
         video_codec = video_metadata.get("video_codec")
+        has_audio = video_metadata.get("has_audio")
         metadata_source = video_metadata.get("metadata_source", "video_basic")
 
     media_score, media_score_label = _build_media_score(
@@ -82,6 +84,7 @@ def build_media_metadata(
         "duration_seconds": duration_seconds,
         "frame_rate": frame_rate,
         "video_codec": video_codec,
+        "has_audio": has_audio,
         "gps": gps,
         "metadata_source": metadata_source,
         "thumbnail_relative_path": None,
@@ -116,6 +119,7 @@ def enrich_saved_media_metadata(media_item: dict[str, Any]) -> dict[str, Any]:
             "duration_seconds",
             "frame_rate",
             "video_codec",
+            "has_audio",
             "gps",
             "metadata_source",
             "media_score",
@@ -477,6 +481,7 @@ def _extract_video_metadata(
         "duration_seconds": duration_seconds,
         "frame_rate": frame_rate,
         "video_codec": parsed_track.get("video_codec"),
+        "has_audio": None,
         "metadata_source": "video_mp4_parser",
     }
 
@@ -532,6 +537,7 @@ def _extract_video_metadata_with_ffprobe(video_path: Path) -> dict[str, Any] | N
         "duration_seconds": duration_seconds,
         "frame_rate": _parse_fraction(video_stream.get("avg_frame_rate") or video_stream.get("r_frame_rate")),
         "video_codec": str(video_stream.get("codec_name", "")).strip() or None,
+        "has_audio": any(stream.get("codec_type") == "audio" for stream in streams if isinstance(stream, dict)),
         "metadata_source": "video_ffprobe",
     }
 

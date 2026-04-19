@@ -46,6 +46,9 @@ def runtime() -> dict[str, object]:
         "queue_backend": settings.queue_backend,
         "local_storage_root": settings.local_storage_root,
         "media_tooling": get_media_tooling_status(),
+        "editor_limits": {
+            "max_reel_clip_duration_seconds": settings.max_reel_clip_duration_seconds,
+        },
         "providers": {
             "gemini_configured": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
             "azure_gpt4_configured": bool(

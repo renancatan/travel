@@ -104,11 +104,19 @@ class FileRepository:
         self._write_album_file(album)
         return album
 
-    def save_cached_suggestion(self, album_id: str, cached_suggestion: dict[str, Any] | None) -> dict[str, Any] | None:
+    def save_cached_suggestion(
+        self,
+        album_id: str,
+        cached_suggestion: dict[str, Any] | None,
+        *,
+        invalidate_rendered_reel: bool = False,
+    ) -> dict[str, Any] | None:
         album = self.get_album(album_id)
         if album is None:
             return None
 
+        if invalidate_rendered_reel:
+            self._clear_rendered_reel_files(album)
         album["cached_suggestion"] = cached_suggestion
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
@@ -119,7 +127,20 @@ class FileRepository:
         if album is None:
             return None
 
-        self._clear_rendered_reel_files(album)
+        current_rendered_reel = album.get("rendered_reel")
+        current_relative_path = ""
+        if isinstance(current_rendered_reel, dict):
+            current_relative_path = str(current_rendered_reel.get("relative_path") or "").strip()
+
+        next_relative_path = ""
+        if isinstance(rendered_reel, dict):
+            next_relative_path = str(rendered_reel.get("relative_path") or "").strip()
+
+        should_clear_existing_files = rendered_reel is None or (
+            bool(current_relative_path) and current_relative_path != next_relative_path
+        )
+        if should_clear_existing_files:
+            self._clear_rendered_reel_files(album)
         album["rendered_reel"] = rendered_reel
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
@@ -377,6 +398,7 @@ class FileRepository:
             "duration_seconds": None,
             "frame_rate": None,
             "video_codec": None,
+            "has_audio": None,
             "gps": None,
             "metadata_source": None,
             "thumbnail_relative_path": None,
@@ -413,6 +435,7 @@ class FileRepository:
                 or media_item.get("duration_seconds") is None
                 or media_item.get("frame_rate") is None
                 or media_item.get("video_codec") is None
+                or media_item.get("has_audio") is None
                 or media_item.get("media_score") is None
             )
 

@@ -6,6 +6,7 @@ import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from services.api.app.core.settings import get_settings
 
@@ -28,6 +29,7 @@ class ReelRenderer:
         settings = get_settings()
         self.storage_root = Path(settings.local_storage_root).expanduser().resolve()
         self.ffmpeg_binary = shutil.which("ffmpeg")
+        self.ffprobe_binary = shutil.which("ffprobe")
 
     def render_draft(self, reel_draft: dict[str, Any]) -> dict[str, Any]:
         if not self.ffmpeg_binary:
@@ -56,42 +58,86 @@ class ReelRenderer:
         output_path = self._resolve_output_path(output_relative_path)
         concat_path = self._resolve_output_path(concat_relative_path)
         render_dir = output_path.parent
-        if render_dir.exists():
-            shutil.rmtree(render_dir)
-        render_dir.mkdir(parents=True, exist_ok=True)
+        staging_render_dir = render_dir.parent / f".{render_dir.name}-staging-{uuid4().hex[:8]}"
+        if staging_render_dir.exists():
+            shutil.rmtree(staging_render_dir, ignore_errors=True)
+        staging_render_dir.mkdir(parents=True, exist_ok=True)
 
-        rendered_clip_paths: list[Path] = []
-        for clip in clips:
-            rendered_clip_paths.append(self._render_clip(clip))
-
-        concat_path.write_text(
-            "".join(f"file '{clip_path.as_posix()}'\n" for clip_path in rendered_clip_paths),
-            encoding="utf-8",
+        render_root_relative = render_dir.relative_to(self.storage_root).as_posix()
+        staging_root_relative = staging_render_dir.relative_to(self.storage_root).as_posix()
+        staging_output_relative_path = self._swap_render_root(
+            output_relative_path,
+            render_root_relative,
+            staging_root_relative,
         )
-
-        self._run_ffmpeg(
-            [
-                self.ffmpeg_binary,
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                str(concat_path),
-                "-an",
-                "-c:v",
-                "libx264",
-                "-pix_fmt",
-                "yuv420p",
-                "-movflags",
-                "+faststart",
-                str(output_path),
-            ]
+        staging_concat_relative_path = self._swap_render_root(
+            concat_relative_path,
+            render_root_relative,
+            staging_root_relative,
         )
+        staging_output_path = self._resolve_output_path(staging_output_relative_path)
+        staging_concat_path = self._resolve_output_path(staging_concat_relative_path)
+
+        try:
+            rendered_clip_paths: list[Path] = []
+            for clip in clips:
+                staged_clip = {
+                    **clip,
+                    "output_relative_path": self._swap_render_root(
+                        str(clip.get("output_relative_path") or "").strip(),
+                        render_root_relative,
+                        staging_root_relative,
+                    ),
+                }
+                rendered_clip_paths.append(self._render_clip(staged_clip))
+
+            staging_concat_path.write_text(
+                "".join(f"file '{clip_path.as_posix()}'\n" for clip_path in rendered_clip_paths),
+                encoding="utf-8",
+            )
+
+            self._run_ffmpeg(
+                [
+                    self.ffmpeg_binary,
+                    "-y",
+                    "-f",
+                    "concat",
+                    "-safe",
+                    "0",
+                    "-i",
+                    str(staging_concat_path),
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a:0",
+                    "-c:v",
+                    "libx264",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-movflags",
+                    "+faststart",
+                    str(staging_output_path),
+                ]
+            )
+
+            if not staging_output_path.exists():
+                raise ReelRenderError("Render finished without producing an output file.")
+
+            if render_dir.exists():
+                shutil.rmtree(render_dir, ignore_errors=True)
+            staging_render_dir.replace(render_dir)
+        except Exception:
+            shutil.rmtree(staging_render_dir, ignore_errors=True)
+            raise
 
         if not output_path.exists():
-            raise ReelRenderError("Render finished without producing an output file.")
+            raise ReelRenderError("Render finished without producing a final output file.")
 
         logger.info(
             "Finished reel render draft=%s output=%s size_bytes=%s",
@@ -139,24 +185,67 @@ class ReelRenderer:
 
         command = [self.ffmpeg_binary, "-y"]
         if media_kind == "video":
+            has_audio = self._video_has_audio(source_path)
             if clip_start_seconds is not None:
                 command.extend(["-ss", f"{clip_start_seconds:.2f}"])
             if clip_end_seconds is not None:
                 command.extend(["-to", f"{clip_end_seconds:.2f}"])
-            command.extend(
-                [
-                    "-i",
-                    str(source_path),
-                    "-vf",
-                    VF_CHAIN,
-                    "-an",
-                    "-c:v",
-                    "libx264",
-                    "-pix_fmt",
-                    "yuv420p",
-                    str(output_path),
-                ]
-            )
+            if has_audio:
+                command.extend(
+                    [
+                        "-i",
+                        str(source_path),
+                        "-vf",
+                        VF_CHAIN,
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "0:a:0",
+                        "-c:v",
+                        "libx264",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-shortest",
+                        str(output_path),
+                    ]
+                )
+            else:
+                command.extend(
+                    [
+                        "-i",
+                        str(source_path),
+                        "-f",
+                        "lavfi",
+                        "-t",
+                        f"{output_duration_seconds:.1f}",
+                        "-i",
+                        "anullsrc=channel_layout=stereo:sample_rate=48000",
+                        "-vf",
+                        VF_CHAIN,
+                        "-map",
+                        "0:v:0",
+                        "-map",
+                        "1:a:0",
+                        "-c:v",
+                        "libx264",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-c:a",
+                        "aac",
+                        "-ar",
+                        "48000",
+                        "-ac",
+                        "2",
+                        "-shortest",
+                        str(output_path),
+                    ]
+                )
         else:
             if output_duration_seconds <= 0:
                 raise ReelRenderError("An image render clip is missing its output duration.")
@@ -168,13 +257,29 @@ class ReelRenderer:
                     f"{output_duration_seconds:.1f}",
                     "-i",
                     str(source_path),
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    f"{output_duration_seconds:.1f}",
+                    "-i",
+                    "anullsrc=channel_layout=stereo:sample_rate=48000",
                     "-vf",
                     VF_CHAIN,
-                    "-an",
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "1:a:0",
                     "-c:v",
                     "libx264",
                     "-pix_fmt",
                     "yuv420p",
+                    "-c:a",
+                    "aac",
+                    "-ar",
+                    "48000",
+                    "-ac",
+                    "2",
+                    "-shortest",
                     str(output_path),
                 ]
             )
@@ -204,6 +309,46 @@ class ReelRenderer:
         if self.storage_root not in resolved.parents and resolved != self.storage_root:
             raise ReelRenderError(f"Unsafe render path: {relative_path}")
         return resolved
+
+    @staticmethod
+    def _swap_render_root(relative_path: str, current_root: str, next_root: str) -> str:
+        if not relative_path:
+            raise ReelRenderError("Missing render path while preparing staging output.")
+        if relative_path == current_root:
+            return next_root
+
+        expected_prefix = f"{current_root}/"
+        if not relative_path.startswith(expected_prefix):
+            raise ReelRenderError(f"Render path does not match expected root: {relative_path}")
+        return f"{next_root}/{relative_path[len(expected_prefix):]}"
+
+    def _video_has_audio(self, source_path: Path) -> bool:
+        if not self.ffprobe_binary:
+            return False
+
+        try:
+            result = subprocess.run(
+                [
+                    self.ffprobe_binary,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "a:0",
+                    "-show_entries",
+                    "stream=codec_type",
+                    "-of",
+                    "default=noprint_wrappers=1:nokey=1",
+                    str(source_path),
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+        return result.returncode == 0 and bool(result.stdout.strip())
 
     @staticmethod
     def _to_float(value: Any) -> float | None:

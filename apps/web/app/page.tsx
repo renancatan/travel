@@ -220,6 +220,7 @@ type AnalysisFrameSample = {
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const NEW_ALBUM_DRAFT_KEY = "travel-project:new-album-draft";
+const DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS = 30;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -319,6 +320,118 @@ function formatRenderMode(value: string): string {
   return value;
 }
 
+function roundToTenth(value: number): number {
+  return Number(value.toFixed(1));
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getMediaDurationSeconds(mediaItem: MediaItem | null): number | null {
+  const duration = mediaItem?.duration_seconds;
+  if (typeof duration !== "number" || !Number.isFinite(duration) || duration <= 0) {
+    return null;
+  }
+  return roundToTenth(duration);
+}
+
+function getProjectReelClipDurationCap(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS;
+  }
+  return roundToTenth(value);
+}
+
+function getEditableVideoStepLimits(
+  step: ReelDraftStep,
+  mediaItem: MediaItem | null,
+  projectMaxDurationSeconds: number,
+) {
+  const minDurationSeconds = 0.3;
+  const mediaDurationSeconds = getMediaDurationSeconds(mediaItem);
+  const maxClipDurationSeconds =
+    mediaDurationSeconds === null
+      ? projectMaxDurationSeconds
+      : roundToTenth(Math.min(projectMaxDurationSeconds, mediaDurationSeconds));
+  const currentClipStartSeconds = roundToTenth(Math.max(0, step.clip_start_seconds ?? 0));
+  const maxClipStartSeconds =
+    mediaDurationSeconds === null
+      ? roundToTenth(Math.max(projectMaxDurationSeconds - minDurationSeconds, 0))
+      : roundToTenth(Math.max(mediaDurationSeconds - minDurationSeconds, 0));
+  const normalizedClipStartSeconds = Math.min(currentClipStartSeconds, maxClipStartSeconds);
+  const maxClipEndSeconds =
+    mediaDurationSeconds === null
+      ? roundToTenth(normalizedClipStartSeconds + maxClipDurationSeconds)
+      : roundToTenth(Math.min(mediaDurationSeconds, normalizedClipStartSeconds + maxClipDurationSeconds));
+  const maxStepDurationSeconds = roundToTenth(
+    Math.max(minDurationSeconds, maxClipEndSeconds - normalizedClipStartSeconds),
+  );
+
+  return {
+    minDurationSeconds,
+    mediaDurationSeconds,
+    maxClipDurationSeconds,
+    maxClipStartSeconds,
+    maxClipEndSeconds,
+    maxStepDurationSeconds,
+  };
+}
+
+function normalizeEditableVideoStep(
+  step: ReelDraftStep,
+  mediaItem: MediaItem | null,
+  projectMaxDurationSeconds: number,
+): ReelDraftStep {
+  const limits = getEditableVideoStepLimits(step, mediaItem, projectMaxDurationSeconds);
+  let clipStartSeconds = roundToTenth(
+    clampNumber(step.clip_start_seconds ?? 0, 0, limits.maxClipStartSeconds),
+  );
+  const maxClipEndSeconds =
+    limits.mediaDurationSeconds === null
+      ? roundToTenth(clipStartSeconds + limits.maxClipDurationSeconds)
+      : roundToTenth(Math.min(limits.mediaDurationSeconds, clipStartSeconds + limits.maxClipDurationSeconds));
+  let clipEndSeconds = step.clip_end_seconds ?? clipStartSeconds + (step.suggested_duration_seconds || 0.3);
+  clipEndSeconds = roundToTenth(
+    clampNumber(clipEndSeconds, clipStartSeconds + limits.minDurationSeconds, maxClipEndSeconds),
+  );
+
+  if (clipEndSeconds <= clipStartSeconds) {
+    const fallbackEndSeconds = roundToTenth(
+      Math.min(maxClipEndSeconds, clipStartSeconds + limits.minDurationSeconds),
+    );
+    if (fallbackEndSeconds <= clipStartSeconds) {
+      clipStartSeconds = roundToTenth(Math.max(0, maxClipEndSeconds - limits.minDurationSeconds));
+      clipEndSeconds = roundToTenth(maxClipEndSeconds);
+    } else {
+      clipEndSeconds = fallbackEndSeconds;
+    }
+  }
+
+  const suggestedDurationSeconds = roundToTenth(
+    Math.max(limits.minDurationSeconds, clipEndSeconds - clipStartSeconds),
+  );
+
+  return {
+    ...step,
+    clip_start_seconds: clipStartSeconds,
+    clip_end_seconds: clipEndSeconds,
+    suggested_duration_seconds: suggestedDurationSeconds,
+  };
+}
+
+function getRenderedReelContentUrl(album: Album | null): string | null {
+  const renderedReel = album?.rendered_reel;
+  if (!album || !renderedReel) {
+    return null;
+  }
+
+  const cacheKey = encodeURIComponent(
+    `${renderedReel.rendered_at}-${renderedReel.file_size_bytes}-${renderedReel.estimated_total_duration_seconds}`,
+  );
+  return `${API_BASE_URL}/albums/${album.id}/rendered-reel/content?v=${cacheKey}`;
+}
+
 function normalizeAlbumName(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
@@ -358,6 +471,33 @@ function buildAlbumCaches(albums: Album[]): {
   return {
     suggestions: nextSuggestions,
     descriptionMeta: nextDescriptionMeta,
+  };
+}
+
+function cloneReelDraft(draft: ReelDraft | null | undefined): ReelDraft | null {
+  if (!draft) {
+    return null;
+  }
+  return JSON.parse(JSON.stringify(draft)) as ReelDraft;
+}
+
+function buildReelDraftEditPayload(draft: ReelDraft) {
+  return {
+    reel_draft: {
+      title: draft.title,
+      caption: draft.caption,
+      cover_media_id: draft.cover_media_id,
+      steps: draft.steps.map((step) => ({
+        role: step.role,
+        media_id: step.media_id,
+        source_role: step.source_role,
+        suggested_duration_seconds: step.suggested_duration_seconds,
+        clip_start_seconds: step.clip_start_seconds,
+        clip_end_seconds: step.clip_end_seconds,
+        edit_instruction: step.edit_instruction,
+        why: step.why,
+      })),
+    },
   };
 }
 
@@ -511,6 +651,11 @@ export default function Page() {
   const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
   const [isRenderingReel, setIsRenderingReel] = useState(false);
+  const [isSavingReelDraft, setIsSavingReelDraft] = useState(false);
+  const [editableReelDraft, setEditableReelDraft] = useState<ReelDraft | null>(null);
+  const [maxReelClipDurationSeconds, setMaxReelClipDurationSeconds] = useState(
+    DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS,
+  );
   const [isPending, startTransition] = useTransition();
 
   const sidebarAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
@@ -518,7 +663,15 @@ export default function Page() {
     albumMode === "new" ? albums.find((album) => album.id === newAlbumId) ?? null : sidebarAlbum;
   const activeSuggestions = workflowAlbum ? suggestionsByAlbum[workflowAlbum.id] ?? null : null;
   const activeDescriptionMeta = workflowAlbum ? descriptionMetaByAlbum[workflowAlbum.id] ?? null : null;
-  const renderSpec = activeSuggestions?.reel_draft?.render_spec ?? null;
+  const workingReelDraft = editableReelDraft ?? activeSuggestions?.reel_draft ?? null;
+  const isReelDraftDirty = Boolean(
+    editableReelDraft &&
+      activeSuggestions?.reel_draft &&
+      JSON.stringify(buildReelDraftEditPayload(editableReelDraft)) !==
+        JSON.stringify(buildReelDraftEditPayload(activeSuggestions.reel_draft))
+  );
+  const renderSpec =
+    !isReelDraftDirty && workingReelDraft?.render_spec ? workingReelDraft.render_spec : activeSuggestions?.reel_draft?.render_spec ?? null;
   const renderBackendAvailable = Boolean(renderSpec?.backend_available);
   const uploadTargetAlbum = workflowAlbum;
   const showUploadStep = Boolean(uploadTargetAlbum);
@@ -585,6 +738,25 @@ export default function Page() {
     }
   }
 
+  async function loadRuntimeConfig() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/runtime`, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+
+      const data = (await response.json()) as {
+        editor_limits?: { max_reel_clip_duration_seconds?: number };
+      };
+      const nextLimit = getProjectReelClipDurationCap(
+        data.editor_limits?.max_reel_clip_duration_seconds,
+      );
+      setMaxReelClipDurationSeconds(nextLimit);
+    } catch {
+      // Fall back to the local default when runtime metadata is unavailable.
+    }
+  }
+
   async function fetchAlbum(albumId: string): Promise<Album | null> {
     try {
       const response = await fetch(`${API_BASE_URL}/albums/${albumId}`, { cache: "no-store" });
@@ -628,7 +800,229 @@ export default function Page() {
     }
   }
 
+  function syncAlbumStateFromApi(updatedAlbum: Album) {
+    setAlbums((current) => upsertAlbum(current, updatedAlbum));
+
+    if (updatedAlbum.cached_suggestion) {
+      setSuggestionsByAlbum((current) => ({
+        ...current,
+        [updatedAlbum.id]: updatedAlbum.cached_suggestion as AlbumSuggestion,
+      }));
+    } else {
+      setSuggestionsByAlbum((current) => {
+        const next = { ...current };
+        delete next[updatedAlbum.id];
+        return next;
+      });
+    }
+
+    if (updatedAlbum.description_meta) {
+      setDescriptionMetaByAlbum((current) => ({
+        ...current,
+        [updatedAlbum.id]: {
+          likelyCategories: updatedAlbum.description_meta?.likely_categories ?? [],
+          analysisMode: updatedAlbum.description_meta?.analysis_mode ?? "unknown",
+        },
+      }));
+    } else {
+      setDescriptionMetaByAlbum((current) => {
+        const next = { ...current };
+        delete next[updatedAlbum.id];
+        return next;
+      });
+    }
+  }
+
+  function getWorkflowMediaItem(mediaId: string): MediaItem | null {
+    if (!workflowAlbum) {
+      return null;
+    }
+    return workflowAlbum.media_items.find((item) => item.id === mediaId) ?? null;
+  }
+
+  function resetEditableReelDraft() {
+    setEditableReelDraft(cloneReelDraft(activeSuggestions?.reel_draft));
+  }
+
+  function moveEditableReelStep(stepIndex: number, direction: -1 | 1) {
+    setEditableReelDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const targetIndex = stepIndex + direction;
+      if (targetIndex < 0 || targetIndex >= current.steps.length) {
+        return current;
+      }
+
+      const nextSteps = [...current.steps];
+      const [movedStep] = nextSteps.splice(stepIndex, 1);
+      nextSteps.splice(targetIndex, 0, movedStep);
+      return {
+        ...current,
+        steps: nextSteps.map((step, index) => ({
+          ...step,
+          step_number: index + 1,
+        })),
+      };
+    });
+  }
+
+  function updateEditableReelStepMedia(stepIndex: number, mediaId: string) {
+    setEditableReelDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const mediaItem = getWorkflowMediaItem(mediaId);
+      if (!mediaItem) {
+        return current;
+      }
+
+      const nextSteps = current.steps.map((step, index) => {
+        if (index !== stepIndex) {
+          return step;
+        }
+
+        if (mediaItem.media_kind === "video") {
+          const defaultDurationSeconds = Math.min(
+            getMediaDurationSeconds(mediaItem) ?? maxReelClipDurationSeconds,
+            3,
+          );
+          return normalizeEditableVideoStep(
+            {
+              ...step,
+              media_id: mediaItem.id,
+              original_filename: mediaItem.original_filename,
+              media_kind: mediaItem.media_kind,
+              relative_path: mediaItem.relative_path,
+              source_role:
+                step.source_role === "still_image"
+                  ? stepIndex === 0
+                    ? "hero_video"
+                    : "supporting_video"
+                  : step.source_role,
+              selection_mode: "video_clip",
+              clip_start_seconds: 0,
+              clip_end_seconds: roundToTenth(defaultDurationSeconds),
+              suggested_duration_seconds: roundToTenth(defaultDurationSeconds),
+            },
+            mediaItem,
+            maxReelClipDurationSeconds,
+          );
+        }
+
+        return {
+          ...step,
+          media_id: mediaItem.id,
+          original_filename: mediaItem.original_filename,
+          media_kind: mediaItem.media_kind,
+          relative_path: mediaItem.relative_path,
+          source_role: "still_image",
+          selection_mode: "full_frame",
+          clip_start_seconds: null,
+          clip_end_seconds: null,
+          suggested_duration_seconds: roundToTenth(
+            Math.min(maxReelClipDurationSeconds, Math.max(0.5, step.suggested_duration_seconds)),
+          ),
+        };
+      });
+
+      const nextAssets = current.assets.some((asset) => asset.media_id === mediaItem.id)
+        ? current.assets
+        : [
+            ...current.assets,
+            {
+              media_id: mediaItem.id,
+              original_filename: mediaItem.original_filename,
+              media_kind: mediaItem.media_kind,
+              content_type: mediaItem.content_type,
+              relative_path: mediaItem.relative_path,
+              thumbnail_relative_path: mediaItem.thumbnail_relative_path,
+            },
+          ];
+
+      return {
+        ...current,
+        cover_media_id: current.cover_media_id ?? nextSteps[0]?.media_id ?? current.cover_media_id,
+        assets: nextAssets,
+        steps: nextSteps,
+      };
+    });
+  }
+
+  function updateEditableReelStepField(
+    stepIndex: number,
+    field: "role" | "edit_instruction" | "why" | "suggested_duration_seconds" | "clip_start_seconds" | "clip_end_seconds",
+    value: string
+  ) {
+    setEditableReelDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextSteps = current.steps.map((step, index) => {
+        if (index !== stepIndex) {
+          return step;
+        }
+
+        if (field === "role" || field === "edit_instruction" || field === "why") {
+          return {
+            ...step,
+            [field]: value,
+          };
+        }
+
+        const parsedValue = value === "" ? null : Number(value);
+        if (parsedValue === null || Number.isNaN(parsedValue)) {
+          return {
+            ...step,
+            [field]: null,
+          };
+        }
+
+        if (step.media_kind !== "video") {
+          if (field === "suggested_duration_seconds") {
+            return {
+              ...step,
+              suggested_duration_seconds: roundToTenth(
+                clampNumber(parsedValue, 0.5, maxReelClipDurationSeconds),
+              ),
+            };
+          }
+          return {
+            ...step,
+            [field]: roundToTenth(Math.max(0, parsedValue)),
+          };
+        }
+
+        const nextStep = {
+          ...step,
+          [field]: roundToTenth(Math.max(0, parsedValue)),
+        };
+
+        if (field === "suggested_duration_seconds") {
+          const clipStartSeconds = roundToTenth(nextStep.clip_start_seconds ?? 0);
+          nextStep.clip_start_seconds = clipStartSeconds;
+          nextStep.clip_end_seconds = roundToTenth(clipStartSeconds + parsedValue);
+        }
+
+        return normalizeEditableVideoStep(
+          nextStep,
+          getWorkflowMediaItem(step.media_id),
+          maxReelClipDurationSeconds,
+        );
+      });
+
+      return {
+        ...current,
+        steps: nextSteps,
+      };
+    });
+  }
+
   useEffect(() => {
+    void loadRuntimeConfig();
     startTransition(() => {
       void loadAlbums();
     });
@@ -753,6 +1147,10 @@ export default function Page() {
       message: "Choose Automatic AI or Manual above first, then run the AI review.",
     });
   }, [workflowAlbum, activeSuggestions]);
+
+  useEffect(() => {
+    setEditableReelDraft(cloneReelDraft(activeSuggestions?.reel_draft));
+  }, [workflowAlbum?.id, activeSuggestions?.reel_draft]);
 
   useEffect(() => {
     if (albumMode !== "existing" || !workflowAlbum || activeSuggestions || isAnalyzing) {
@@ -1227,7 +1625,7 @@ export default function Page() {
   }
 
   async function handleCopyReelCaption() {
-    if (!activeSuggestions?.reel_draft) {
+    if (!workingReelDraft) {
       setSuggestionStatus({
         tone: "error",
         message: "Run AI review first. The reel draft is not ready yet.",
@@ -1236,7 +1634,7 @@ export default function Page() {
     }
 
     try {
-      await navigator.clipboard.writeText(activeSuggestions.reel_draft.caption);
+      await navigator.clipboard.writeText(workingReelDraft.caption);
       setSuggestionStatus({
         tone: "ok",
         message: "Reel caption copied to your clipboard.",
@@ -1250,7 +1648,7 @@ export default function Page() {
   }
 
   function handleDownloadReelDraft() {
-    if (!activeSuggestions?.reel_draft) {
+    if (!workingReelDraft) {
       setSuggestionStatus({
         tone: "error",
         message: "Run AI review first. The reel draft is not ready yet.",
@@ -1258,7 +1656,7 @@ export default function Page() {
       return;
     }
 
-    downloadJsonFile(`${activeSuggestions.reel_draft.draft_name}.json`, activeSuggestions.reel_draft);
+    downloadJsonFile(`${workingReelDraft.draft_name}.json`, workingReelDraft);
     setSuggestionStatus({
       tone: "ok",
       message: "Reel draft JSON downloaded.",
@@ -1266,7 +1664,7 @@ export default function Page() {
   }
 
   async function handleCopyRenderCommands() {
-    if (!activeSuggestions?.reel_draft?.render_spec?.shell_commands.length) {
+    if (!renderSpec?.shell_commands.length) {
       setSuggestionStatus({
         tone: "error",
         message: "No render commands are available yet for this reel draft.",
@@ -1275,7 +1673,7 @@ export default function Page() {
     }
 
     try {
-      await navigator.clipboard.writeText(activeSuggestions.reel_draft.render_spec.shell_commands.join("\n"));
+      await navigator.clipboard.writeText(renderSpec.shell_commands.join("\n"));
       setSuggestionStatus({
         tone: "ok",
         message: "Render commands copied to your clipboard.",
@@ -1288,6 +1686,51 @@ export default function Page() {
     }
   }
 
+  async function handleApplyReelDraftEdits() {
+    if (!workflowAlbum || !editableReelDraft) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album and run AI review before editing the reel draft.",
+      });
+      return;
+    }
+
+    setIsSavingReelDraft(true);
+    setSuggestionStatus({
+      tone: "idle",
+      message: "Saving reel draft edits...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/reel-draft`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(buildReelDraftEditPayload(editableReelDraft)),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not save reel edits (${response.status})`);
+      }
+
+      const updatedAlbum = (await response.json()) as Album;
+      syncAlbumStateFromApi(updatedAlbum);
+      setSuggestionStatus({
+        tone: "ok",
+        message: "Reel draft edits saved. The render spec has been refreshed.",
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not save reel draft edits.",
+      });
+    } finally {
+      setIsSavingReelDraft(false);
+    }
+  }
+
   async function handleRenderReel() {
     if (!workflowAlbum) {
       setSuggestionStatus({
@@ -1297,7 +1740,7 @@ export default function Page() {
       return;
     }
 
-    if (!activeSuggestions?.reel_draft) {
+    if (!workingReelDraft) {
       setSuggestionStatus({
         tone: "error",
         message: "Run AI review first. The reel draft is not ready yet.",
@@ -1316,12 +1759,16 @@ export default function Page() {
     setIsRenderingReel(true);
     setSuggestionStatus({
       tone: "idle",
-      message: "Rendering reel locally...",
+      message: isReelDraftDirty ? "Saving edits and rendering reel locally..." : "Rendering reel locally...",
     });
 
     try {
       const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/rendered-reel`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: isReelDraftDirty ? JSON.stringify(buildReelDraftEditPayload(workingReelDraft)) : undefined,
       });
 
       if (!response.ok) {
@@ -1330,10 +1777,12 @@ export default function Page() {
       }
 
       const data = (await response.json()) as RenderReelResponse;
-      setAlbums((current) => upsertAlbum(current, data.album));
+      syncAlbumStateFromApi(data.album);
       setSuggestionStatus({
         tone: "ok",
-        message: `Rendered reel is ready for "${data.album.name}".`,
+        message: isReelDraftDirty
+          ? `Edits were applied and the rendered reel is ready for "${data.album.name}".`
+          : `Rendered reel is ready for "${data.album.name}".`,
       });
     } catch (error) {
       setSuggestionStatus({
@@ -1354,8 +1803,17 @@ export default function Page() {
       return;
     }
 
+    const renderedReelUrl = getRenderedReelContentUrl(workflowAlbum);
+    if (!renderedReelUrl) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Rendered reel URL is not available yet.",
+      });
+      return;
+    }
+
     const link = document.createElement("a");
-    link.href = `${API_BASE_URL}/albums/${workflowAlbum.id}/rendered-reel/content`;
+    link.href = renderedReelUrl;
     link.download = `${workflowAlbum.rendered_reel.draft_name}.mp4`;
     document.body.appendChild(link);
     link.click();
@@ -1374,6 +1832,8 @@ export default function Page() {
     const mediaItem = workflowAlbum.media_items.find((item) => item.id === mediaId);
     return mediaItem?.original_filename ?? mediaId;
   }
+
+  const renderedReelContentUrl = getRenderedReelContentUrl(workflowAlbum);
 
   return (
     <main className="shell">
@@ -1985,24 +2445,40 @@ export default function Page() {
                           <div>
                             <strong>Reel draft export</strong>
                             <p>
-                              {activeSuggestions.reel_draft
-                                ? `${activeSuggestions.reel_draft.output_width}x${activeSuggestions.reel_draft.output_height} • ${activeSuggestions.reel_draft.fps} fps • ${activeSuggestions.reel_draft.assets.length} asset(s) • ${formatVideoStrategy(activeSuggestions.reel_draft.video_strategy)}`
+                              {workingReelDraft
+                                ? `${workingReelDraft.output_width}x${workingReelDraft.output_height} • ${workingReelDraft.fps} fps • ${workingReelDraft.assets.length} asset(s) • ${formatVideoStrategy(workingReelDraft.video_strategy)}`
                                 : "A downloadable reel draft manifest appears here after the AI review runs."}
                             </p>
                           </div>
-                          {activeSuggestions.reel_draft ? (
+                          {workingReelDraft ? (
                             <div className="actions">
                               <button className="button-secondary" onClick={handleCopyReelCaption} type="button">
                                 Copy caption
                               </button>
-                              {activeSuggestions.reel_draft.render_spec?.shell_commands.length ? (
+                              {renderSpec?.shell_commands.length ? (
                                 <button className="button-secondary" onClick={handleCopyRenderCommands} type="button">
                                   Copy render commands
                                 </button>
                               ) : null}
                               <button
                                 className="button-secondary"
-                                disabled={!renderBackendAvailable || isRenderingReel}
+                                disabled={!isReelDraftDirty || isSavingReelDraft}
+                                onClick={() => void handleApplyReelDraftEdits()}
+                                type="button"
+                              >
+                                {isSavingReelDraft ? "Saving edits..." : "Apply draft edits"}
+                              </button>
+                              <button
+                                className="button-secondary"
+                                disabled={!isReelDraftDirty}
+                                onClick={resetEditableReelDraft}
+                                type="button"
+                              >
+                                Reset edits
+                              </button>
+                              <button
+                                className="button-secondary"
+                                disabled={!renderBackendAvailable || isRenderingReel || isSavingReelDraft}
                                 onClick={handleRenderReel}
                                 title={
                                   renderBackendAvailable
@@ -2025,36 +2501,91 @@ export default function Page() {
                             </div>
                           ) : null}
                         </div>
-                        {activeSuggestions.reel_draft ? (
+                        {workingReelDraft ? (
                           <div className="reel-draft-grid">
                             <div className="meta-card reel-draft-card">
                               <strong>Draft title</strong>
-                              <span>{activeSuggestions.reel_draft.title}</span>
+                              <input
+                                className="input draft-input"
+                                value={workingReelDraft.title}
+                                onChange={(event) =>
+                                  setEditableReelDraft((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          title: event.target.value,
+                                        }
+                                      : current,
+                                  )
+                                }
+                                type="text"
+                              />
                             </div>
                             <div className="meta-card reel-draft-card">
                               <strong>Cover</strong>
-                              <span>{getMediaLabel(activeSuggestions.reel_draft.cover_media_id)}</span>
+                              <select
+                                className="input draft-input"
+                                value={workingReelDraft.cover_media_id ?? ""}
+                                onChange={(event) =>
+                                  setEditableReelDraft((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          cover_media_id: event.target.value || null,
+                                        }
+                                      : current,
+                                  )
+                                }
+                              >
+                                {workingReelDraft.assets.map((asset) => (
+                                  <option key={`cover-option-${asset.media_id}`} value={asset.media_id}>
+                                    {asset.original_filename}
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                             <div className="meta-card reel-draft-card">
                               <strong>Audio</strong>
-                              <span>{activeSuggestions.reel_draft.audio_strategy}</span>
+                              <span>{workingReelDraft.audio_strategy}</span>
                             </div>
                             <div className="meta-card reel-draft-card">
                               <strong>Video strategy</strong>
-                              <span>{formatVideoStrategy(activeSuggestions.reel_draft.video_strategy)}</span>
+                              <span>{formatVideoStrategy(workingReelDraft.video_strategy)}</span>
                             </div>
                             <div className="meta-card reel-draft-card">
                               <strong>Length</strong>
-                              <span>{formatDuration(activeSuggestions.reel_draft.estimated_total_duration_seconds)}</span>
+                              <span>{formatDuration(workingReelDraft.estimated_total_duration_seconds)}</span>
                             </div>
                             <div className="ai-card ai-card-wide">
                               <strong>Caption preview</strong>
-                              <p>{activeSuggestions.reel_draft.caption}</p>
+                              <textarea
+                                className="textarea draft-textarea"
+                                value={workingReelDraft.caption}
+                                onChange={(event) =>
+                                  setEditableReelDraft((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          caption: event.target.value,
+                                        }
+                                      : current,
+                                  )
+                                }
+                              />
                             </div>
+                            {isReelDraftDirty ? (
+                              <div className="ai-inline-note ai-card-wide">
+                                <strong>Draft edits pending</strong>
+                                <span>
+                                  The step list below is edited locally. Apply the draft edits or render directly to rebuild the
+                                  render spec from these changes.
+                                </span>
+                              </div>
+                            ) : null}
                             <div className="ai-card ai-card-wide">
                               <strong>Draft assets</strong>
                               <div className="candidate-list">
-                                {activeSuggestions.reel_draft.assets.map((asset) => (
+                                {workingReelDraft.assets.map((asset) => (
                                   <div className="candidate-row" key={`draft-asset-${asset.media_id}`}>
                                     <div>
                                       <strong>{asset.original_filename}</strong>
@@ -2069,53 +2600,167 @@ export default function Page() {
                             </div>
                             <div className="ai-card ai-card-wide">
                               <strong>Draft steps</strong>
-                              <div className="candidate-list">
-                                {activeSuggestions.reel_draft.steps.map((step) => (
-                                  <div className="candidate-row" key={`draft-step-${step.step_number}-${step.media_id}`}>
-                                    <div>
-                                      <strong>
-                                        Step {step.step_number}: {step.role} - {step.original_filename}
-                                      </strong>
+                              <div className="draft-step-list">
+                                {workingReelDraft.steps.map((step, stepIndex) => {
+                                  const stepMediaItem = getWorkflowMediaItem(step.media_id);
+                                  const videoStepLimits =
+                                    step.media_kind === "video"
+                                      ? getEditableVideoStepLimits(
+                                          step,
+                                          stepMediaItem,
+                                          maxReelClipDurationSeconds,
+                                        )
+                                      : null;
+
+                                  return (
+                                  <div className="draft-step-editor" key={`draft-step-${step.step_number}-${step.media_id}`}>
+                                    <div className="draft-step-header">
+                                      <div>
+                                        <span className="reel-plan-index">Step {stepIndex + 1}</span>
+                                        <strong>
+                                          {step.role}: {step.original_filename}
+                                        </strong>
+                                      </div>
+                                      <div className="actions">
+                                        <button
+                                          className="button-secondary button-chip"
+                                          disabled={stepIndex === 0}
+                                          onClick={() => moveEditableReelStep(stepIndex, -1)}
+                                          type="button"
+                                        >
+                                          Move up
+                                        </button>
+                                        <button
+                                          className="button-secondary button-chip"
+                                          disabled={stepIndex === workingReelDraft.steps.length - 1}
+                                          onClick={() => moveEditableReelStep(stepIndex, 1)}
+                                          type="button"
+                                        >
+                                          Move down
+                                        </button>
+                                      </div>
+                                    </div>
+                                    <div className="draft-step-grid">
+                                      <label className="draft-field">
+                                        <span>Role</span>
+                                        <input
+                                          className="input draft-input"
+                                          value={step.role}
+                                          onChange={(event) => updateEditableReelStepField(stepIndex, "role", event.target.value)}
+                                          type="text"
+                                        />
+                                      </label>
+                                      <label className="draft-field">
+                                        <span>Asset</span>
+                                        <select
+                                          className="input draft-input"
+                                          value={step.media_id}
+                                          onChange={(event) => updateEditableReelStepMedia(stepIndex, event.target.value)}
+                                        >
+                                          {workflowAlbum.media_items.map((item) => (
+                                            <option key={`draft-media-option-${item.id}`} value={item.id}>
+                                              {item.original_filename}
+                                            </option>
+                                          ))}
+                                        </select>
+                                      </label>
+                                      <label className="draft-field">
+                                        <span>Duration</span>
+                                        <input
+                                          className="input draft-input"
+                                          value={step.suggested_duration_seconds.toFixed(1)}
+                                          onChange={(event) =>
+                                            updateEditableReelStepField(stepIndex, "suggested_duration_seconds", event.target.value)
+                                          }
+                                          max={
+                                            step.media_kind === "video"
+                                              ? videoStepLimits?.maxStepDurationSeconds.toFixed(1)
+                                              : maxReelClipDurationSeconds.toFixed(1)
+                                          }
+                                          min={step.media_kind === "video" ? "0.3" : "0.5"}
+                                          step="0.1"
+                                          type="number"
+                                        />
+                                      </label>
+                                      {step.media_kind === "video" ? (
+                                        <>
+                                          <label className="draft-field">
+                                            <span>Clip start</span>
+                                            <input
+                                              className="input draft-input"
+                                              value={step.clip_start_seconds?.toFixed(1) ?? ""}
+                                              onChange={(event) =>
+                                                updateEditableReelStepField(stepIndex, "clip_start_seconds", event.target.value)
+                                              }
+                                              min="0"
+                                              max={videoStepLimits?.maxClipStartSeconds.toFixed(1)}
+                                              step="0.1"
+                                              type="number"
+                                            />
+                                          </label>
+                                          <label className="draft-field">
+                                            <span>Clip end</span>
+                                            <input
+                                              className="input draft-input"
+                                              value={step.clip_end_seconds?.toFixed(1) ?? ""}
+                                              onChange={(event) =>
+                                                updateEditableReelStepField(stepIndex, "clip_end_seconds", event.target.value)
+                                              }
+                                              min={
+                                                step.clip_start_seconds !== null
+                                                  ? roundToTenth(step.clip_start_seconds + 0.3).toFixed(1)
+                                                  : "0.3"
+                                              }
+                                              max={videoStepLimits?.maxClipEndSeconds.toFixed(1)}
+                                              step="0.1"
+                                              type="number"
+                                            />
+                                          </label>
+                                        </>
+                                      ) : null}
+                                    </div>
+                                    <div className="draft-step-meta">
                                       <span>
                                         {formatSourceRole(step.source_role)}
                                         {step.selection_mode === "video_clip"
                                           ? ` • ${formatClipWindow(step.clip_start_seconds, step.clip_end_seconds)}`
                                           : ""}
                                       </span>
+                                      <em>{formatDuration(step.suggested_duration_seconds)}</em>
                                     </div>
-                                    <em>{formatDuration(step.suggested_duration_seconds)}</em>
                                   </div>
-                                ))}
+                                  );
+                                })}
                               </div>
                             </div>
-                            {activeSuggestions.reel_draft.render_spec ? (
+                            {renderSpec ? (
                               <div className="ai-card ai-card-wide">
                                 <div className="reel-plan-header">
                                   <div>
                                     <strong>Render spec</strong>
                                     <p>
-                                      {activeSuggestions.reel_draft.render_spec.backend_available
-                                        ? `${activeSuggestions.reel_draft.render_spec.backend} is available locally.`
-                                        : `${activeSuggestions.reel_draft.render_spec.backend} commands are ready, but the binary is not installed on this machine.`}
+                                      {renderSpec.backend_available
+                                        ? `${renderSpec.backend} is available locally.`
+                                        : `${renderSpec.backend} commands are ready, but the binary is not installed on this machine.`}
                                     </p>
                                   </div>
                                 </div>
                                 <div className="reel-draft-grid">
                                   <div className="meta-card reel-draft-card">
                                     <strong>Backend</strong>
-                                    <span>{activeSuggestions.reel_draft.render_spec.backend}</span>
+                                    <span>{renderSpec.backend}</span>
                                   </div>
                                   <div className="meta-card reel-draft-card">
                                     <strong>Run from</strong>
-                                    <span>{activeSuggestions.reel_draft.render_spec.working_directory}</span>
+                                    <span>{renderSpec.working_directory}</span>
                                   </div>
                                   <div className="meta-card reel-draft-card">
                                     <strong>Output file</strong>
-                                    <span>{activeSuggestions.reel_draft.render_spec.output_relative_path}</span>
+                                    <span>{renderSpec.output_relative_path}</span>
                                   </div>
                                   <div className="meta-card reel-draft-card">
                                     <strong>Concat file</strong>
-                                    <span>{activeSuggestions.reel_draft.render_spec.concat_relative_path}</span>
+                                    <span>{renderSpec.concat_relative_path}</span>
                                   </div>
                                 </div>
                                 {!renderBackendAvailable ? (
@@ -2125,9 +2770,17 @@ export default function Page() {
                                     </div>
                                   </div>
                                 ) : null}
-                                {activeSuggestions.reel_draft.render_spec.notes.length ? (
+                                {isReelDraftDirty ? (
                                   <div className="render-note-list">
-                                    {activeSuggestions.reel_draft.render_spec.notes.map((note) => (
+                                    <div className="render-note">
+                                      Render spec details below reflect the last applied draft. Save edits or render directly to rebuild them
+                                      from your current step changes.
+                                    </div>
+                                  </div>
+                                ) : null}
+                                {renderSpec.notes.length ? (
+                                  <div className="render-note-list">
+                                    {renderSpec.notes.map((note) => (
                                       <div className="render-note" key={note}>
                                         {note}
                                       </div>
@@ -2135,7 +2788,7 @@ export default function Page() {
                                   </div>
                                 ) : null}
                                 <div className="candidate-list">
-                                  {activeSuggestions.reel_draft.render_spec.clips.map((clip) => (
+                                  {renderSpec.clips.map((clip) => (
                                     <div className="candidate-row" key={`render-clip-${clip.step_number}-${clip.media_id}`}>
                                       <div>
                                         <strong>
@@ -2157,9 +2810,7 @@ export default function Page() {
                                 </div>
                                 <details className="command-details">
                                   <summary>Shell commands</summary>
-                                  <pre className="command-block">
-                                    {activeSuggestions.reel_draft.render_spec.shell_commands.join("\n")}
-                                  </pre>
+                                  <pre className="command-block">{renderSpec.shell_commands.join("\n")}</pre>
                                 </details>
                               </div>
                             ) : null}
@@ -2182,11 +2833,14 @@ export default function Page() {
                                   </div>
                                 </div>
                                 <div className="render-preview">
-                                  <video
-                                    controls
-                                    preload="metadata"
-                                    src={`${API_BASE_URL}/albums/${workflowAlbum.id}/rendered-reel/content`}
-                                  />
+                                  {renderedReelContentUrl ? (
+                                    <video
+                                      key={renderedReelContentUrl}
+                                      controls
+                                      preload="metadata"
+                                      src={renderedReelContentUrl}
+                                    />
+                                  ) : null}
                                 </div>
                                 <p className="render-preview-meta">
                                   {formatBytes(workflowAlbum.rendered_reel.file_size_bytes)} •{" "}
@@ -2236,7 +2890,7 @@ export default function Page() {
                     <article className="media-card" key={item.id}>
                       <div className="media-visual">
                         {item.media_kind === "image" ? (
-                          <img alt={item.original_filename} src={mediaUrl} />
+                          <img alt="" aria-hidden="true" src={mediaUrl} />
                         ) : item.media_kind === "video" ? (
                           <video controls poster={thumbnailUrl} preload="metadata" src={mediaUrl} />
                         ) : (
