@@ -840,6 +840,119 @@ export default function Page() {
     return workflowAlbum.media_items.find((item) => item.id === mediaId) ?? null;
   }
 
+  function deriveEditableVideoStrategy(steps: ReelDraftStep[]): string {
+    const videoMediaIds = Array.from(new Set(steps.filter((step) => step.media_kind === "video").map((step) => step.media_id)));
+    if (videoMediaIds.length > 1) {
+      return "multi_clip_sequence";
+    }
+    if (videoMediaIds.length === 1) {
+      return "hero_video";
+    }
+    return "still_sequence";
+  }
+
+  function buildEditableDraftAsset(mediaId: string, currentDraft: ReelDraft): ReelDraftAsset | null {
+    const mediaItem = getWorkflowMediaItem(mediaId);
+    if (mediaItem) {
+      return {
+        media_id: mediaItem.id,
+        original_filename: mediaItem.original_filename,
+        media_kind: mediaItem.media_kind,
+        content_type: mediaItem.content_type,
+        relative_path: mediaItem.relative_path,
+        thumbnail_relative_path: mediaItem.thumbnail_relative_path,
+      };
+    }
+
+    return currentDraft.assets.find((asset) => asset.media_id === mediaId) ?? null;
+  }
+
+  function syncEditableReelDraft(
+    currentDraft: ReelDraft,
+    nextStepsInput: ReelDraftStep[],
+    nextCoverMediaId: string | null = currentDraft.cover_media_id,
+  ): ReelDraft {
+    const nextSteps = nextStepsInput.map((step, index) => ({
+      ...step,
+      step_number: index + 1,
+    }));
+
+    const safeCoverMediaId =
+      nextCoverMediaId && buildEditableDraftAsset(nextCoverMediaId, currentDraft)
+        ? nextCoverMediaId
+        : nextSteps[0]?.media_id ?? null;
+
+    const assetIds: string[] = [];
+    if (safeCoverMediaId) {
+      assetIds.push(safeCoverMediaId);
+    }
+    for (const step of nextSteps) {
+      if (!assetIds.includes(step.media_id)) {
+        assetIds.push(step.media_id);
+      }
+    }
+
+    const nextAssets = assetIds
+      .map((mediaId) => buildEditableDraftAsset(mediaId, currentDraft))
+      .filter((asset): asset is ReelDraftAsset => Boolean(asset));
+
+    return {
+      ...currentDraft,
+      cover_media_id: safeCoverMediaId,
+      steps: nextSteps,
+      assets: nextAssets,
+      estimated_total_duration_seconds: roundToTenth(
+        nextSteps.reduce((total, step) => total + step.suggested_duration_seconds, 0),
+      ),
+      video_strategy: deriveEditableVideoStrategy(nextSteps),
+    };
+  }
+
+  function buildNewEditableReelStep(mediaItem: MediaItem, currentStepCount: number): ReelDraftStep {
+    const role = currentStepCount === 0 ? "Hook" : "Extra beat";
+    if (mediaItem.media_kind === "video") {
+      const defaultDurationSeconds = Math.min(
+        getMediaDurationSeconds(mediaItem) ?? maxReelClipDurationSeconds,
+        3,
+      );
+      return normalizeEditableVideoStep(
+        {
+          step_number: currentStepCount + 1,
+          role,
+          media_id: mediaItem.id,
+          original_filename: mediaItem.original_filename,
+          media_kind: mediaItem.media_kind,
+          source_role: currentStepCount === 0 ? "hero_video" : "supporting_video",
+          selection_mode: "video_clip",
+          clip_start_seconds: 0,
+          clip_end_seconds: roundToTenth(defaultDurationSeconds),
+          relative_path: mediaItem.relative_path,
+          suggested_duration_seconds: roundToTenth(defaultDurationSeconds),
+          edit_instruction: "Trim this extra beat where the motion is clearest.",
+          why: "Added manually before render.",
+        },
+        mediaItem,
+        maxReelClipDurationSeconds,
+      );
+    }
+
+    return {
+      step_number: currentStepCount + 1,
+      role,
+      media_id: mediaItem.id,
+      original_filename: mediaItem.original_filename,
+      media_kind: mediaItem.media_kind,
+      source_role: "still_image",
+      selection_mode: "full_frame",
+      clip_start_seconds: null,
+      clip_end_seconds: null,
+      relative_path: mediaItem.relative_path,
+      suggested_duration_seconds: 1.5,
+      edit_instruction: "Hold this added beat briefly or crop it as needed.",
+      why: "Added manually before render.",
+    };
+  }
+
   function resetEditableReelDraft() {
     setEditableReelDraft(cloneReelDraft(activeSuggestions?.reel_draft));
   }
@@ -858,13 +971,41 @@ export default function Page() {
       const nextSteps = [...current.steps];
       const [movedStep] = nextSteps.splice(stepIndex, 1);
       nextSteps.splice(targetIndex, 0, movedStep);
-      return {
-        ...current,
-        steps: nextSteps.map((step, index) => ({
-          ...step,
-          step_number: index + 1,
-        })),
-      };
+      return syncEditableReelDraft(current, nextSteps);
+    });
+  }
+
+  function addEditableReelStep() {
+    setEditableReelDraft((current) => {
+      if (!current || !workflowAlbum || current.steps.length >= 12) {
+        return current;
+      }
+
+      const usedMediaIds = new Set(current.steps.map((step) => step.media_id));
+      const nextMediaItem =
+        workflowAlbum.media_items.find((item) => !usedMediaIds.has(item.id)) ??
+        workflowAlbum.media_items[0] ??
+        null;
+      if (!nextMediaItem) {
+        return current;
+      }
+
+      const nextSteps = [...current.steps, buildNewEditableReelStep(nextMediaItem, current.steps.length)];
+      return syncEditableReelDraft(current, nextSteps);
+    });
+  }
+
+  function removeEditableReelStep(stepIndex: number) {
+    setEditableReelDraft((current) => {
+      if (!current || current.steps.length <= 1) {
+        return current;
+      }
+
+      const removedStep = current.steps[stepIndex];
+      const nextSteps = current.steps.filter((_, index) => index !== stepIndex);
+      const nextCoverMediaId =
+        removedStep && current.cover_media_id === removedStep.media_id ? nextSteps[0]?.media_id ?? null : current.cover_media_id;
+      return syncEditableReelDraft(current, nextSteps, nextCoverMediaId);
     });
   }
 
@@ -942,12 +1083,13 @@ export default function Page() {
             },
           ];
 
-      return {
-        ...current,
-        cover_media_id: current.cover_media_id ?? nextSteps[0]?.media_id ?? current.cover_media_id,
-        assets: nextAssets,
-        steps: nextSteps,
-      };
+      return syncEditableReelDraft(
+        {
+          ...current,
+          assets: nextAssets,
+        },
+        nextSteps,
+      );
     });
   }
 
@@ -1014,10 +1156,7 @@ export default function Page() {
         );
       });
 
-      return {
-        ...current,
-        steps: nextSteps,
-      };
+      return syncEditableReelDraft(current, nextSteps);
     });
   }
 
@@ -2599,7 +2738,25 @@ export default function Page() {
                               </div>
                             </div>
                             <div className="ai-card ai-card-wide">
-                              <strong>Draft steps</strong>
+                              <div className="reel-plan-header">
+                                <div>
+                                  <strong>Draft steps</strong>
+                                  <p>
+                                    {workingReelDraft.steps.length} beat(s) in this draft. You can add up to 12 and keep at
+                                    least 1.
+                                  </p>
+                                </div>
+                                <div className="actions">
+                                  <button
+                                    className="button-secondary"
+                                    disabled={workingReelDraft.steps.length >= 12 || workflowAlbum.media_items.length === 0}
+                                    onClick={addEditableReelStep}
+                                    type="button"
+                                  >
+                                    Add beat
+                                  </button>
+                                </div>
+                              </div>
                               <div className="draft-step-list">
                                 {workingReelDraft.steps.map((step, stepIndex) => {
                                   const stepMediaItem = getWorkflowMediaItem(step.media_id);
@@ -2637,6 +2794,14 @@ export default function Page() {
                                           type="button"
                                         >
                                           Move down
+                                        </button>
+                                        <button
+                                          className="button-secondary button-chip"
+                                          disabled={workingReelDraft.steps.length <= 1}
+                                          onClick={() => removeEditableReelStep(stepIndex)}
+                                          type="button"
+                                        >
+                                          Remove
                                         </button>
                                       </div>
                                     </div>

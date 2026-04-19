@@ -55,14 +55,22 @@
 - [ ] Add basic aesthetic ranking heuristics before personal-style learning.
 - [ ] Add clip extraction with `ffmpeg`.
 - [ ] Add soundtrack selection and audio-mixing controls on top of the current source-audio-preserving render path.
+- [ ] Add a simple remove-audio / mute option for rendered reels when the user does not want source audio.
 - [x] Add first-pass manual reel editing controls:
   - reorder beats
   - swap chosen assets
   - adjust clip windows
-- [ ] Expand manual reel editing:
-  - add/remove beats
+- [x] Expand manual reel editing:
+  - add beats from extra images/videos
+  - remove beats from the AI draft
+- [ ] Continue expanding manual reel editing:
   - drag-and-drop reorder
   - save alternate draft versions
+- [ ] Add AI reel variants:
+  - suggest multiple reel drafts with different target lengths such as 10s, 20s, and 30s
+  - generate multiple variants within the same target length without making them too similar
+  - support different creative angles or audience targets across those variants
+- [ ] Show advanced reel editing only after the user selects which suggested reel variant(s) they want to keep.
 - [ ] Normalize exports for social-ready output sizes and frame rates.
 - [ ] Keep all AI decisions explainable in the UI.
 - [ ] Log accept/reject feedback for future personalization.

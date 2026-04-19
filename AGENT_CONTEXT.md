@@ -176,6 +176,8 @@ Implemented in `apps/web`:
 - stale rendered-reel metadata is now cleared automatically if the UI asks for a file that no longer exists on disk
 - rendered-reel preview and download now include a cache-busting URL tied to `rendered_at`, and the backend serves that content with `no-store` headers so browsers stop reusing old reel bytes after re-render
 - manual reel editing now clamps video clip windows and durations to the smaller of the real asset duration and the backend-configured max clip cap, so the editor no longer allows values that later fail at render time
+- the new clip-duration clamp has been sanity-checked with a longer video and now behaves cleanly in real use
+- manual reel editing now also supports adding extra beats and removing AI-suggested beats before save/render
 
 ### Operational note
 
@@ -196,13 +198,19 @@ Implemented in `apps/web`:
 - this is still heuristic; it does not yet detect the best scene boundaries or extract clips with `ffmpeg`
 - real local reel rendering is now validated with `ffmpeg` and `ffprobe`
 - rendered output now preserves source audio on video beats and uses silent filler audio elsewhere; richer soundtrack and audio-mixing behavior are still pending
+- there is still no simple user-facing mute/remove-audio toggle for reels yet
 - render attempts now log clearer API-side messages for request, failure, and success, which will help once real `ffmpeg` debugging starts
 - manual reel editing is still first-pass:
   - reorder beats
   - swap assets per beat
   - adjust clip windows and durations
   - edit title, caption, and cover
-- the editor does not yet support add/remove beats, drag-and-drop reordering, or multiple saved draft versions
+- the editor now supports add/remove beats, but it still does not support drag-and-drop reordering or multiple saved draft versions
+- AI still produces a single main reel draft at a time; it does not yet suggest multiple reel variants across different target lengths or creative angles
+- the product direction for later is:
+  - let AI suggest multiple reel candidates such as 10s, 20s, and 30s
+  - allow several variants within one target length
+  - only then expose deeper editing for the selected reel variant(s)
 - no live map update flow yet
 - no S3/R2 abstraction wired for production storage yet
 - no auth or multi-user support yet
@@ -218,8 +226,10 @@ Implemented in `apps/web`:
 7. Improve clip-window logic so `multi_clip_sequence` albums split across the best video moments more intelligently.
 8. Improve travel-specific scene tagging beyond generic labels.
 9. Improve the curation scoring so it reflects actual aesthetic quality better.
-10. Improve audio handling beyond simple source-audio preservation: soundtrack selection, gain control, and mix rules.
-11. Expand the reel editor with add/remove beats, drag-and-drop reordering, and alternate saved versions.
+10. Add a simple mute/remove-audio toggle for reels, then improve audio handling beyond source-audio preservation with soundtrack selection, gain control, and mix rules.
+11. Continue expanding the reel editor with drag-and-drop reordering and alternate saved versions.
+12. Add a simple mute/remove-audio toggle, then improve soundtrack and audio-mixing controls.
+13. Add AI-generated reel variants across different target lengths and creative angles, then gate deeper editing behind selecting the desired variant(s).
 
 ## Working Rules For Future Changes
 
@@ -254,7 +264,10 @@ Implemented in `apps/web`:
 - validate the new `video_strategy` and clip-window output with real albums that contain 2+ strong videos
 - improve rendered reel quality now that the real backend render step is validated
 - improve source-audio handling with soundtrack support and mixing controls
-- expand manual reel editing beyond the first pass
+- add a simple mute/remove-audio option to the reel workflow
+- continue expanding manual reel editing beyond the current add/remove/reorder controls
+- add multiple AI reel variants with different target lengths and creative angles
+- show deeper editing controls after the user picks the reel variant(s) they want to keep
 - define the first “post candidate” output contract
 - start storage abstraction for local vs cloud backends
 
