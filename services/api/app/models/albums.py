@@ -46,6 +46,11 @@ class UpdateReelDraftRequest(BaseModel):
     reel_draft: ReelDraftEditInput
 
 
+class SaveReelDraftVersionRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=120)
+    reel_draft: ReelDraftEditInput
+
+
 class MediaItemResponse(BaseModel):
     id: str
     album_id: str

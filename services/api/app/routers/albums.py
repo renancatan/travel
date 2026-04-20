@@ -17,11 +17,12 @@ from services.api.app.models.albums import (
     CreateAlbumRequest,
     GenerateAlbumDescriptionResponse,
     RenderReelResponse,
+    SaveReelDraftVersionRequest,
     UpdateReelDraftRequest,
     UpdateAlbumRequest,
     UploadMediaResponse,
 )
-from services.api.app.models.suggestions import AlbumSuggestionResponse
+from services.api.app.models.suggestions import AlbumSuggestionResponse, GenerateAlbumSuggestionsRequest
 
 router = APIRouter(prefix="/albums", tags=["albums"])
 repository = FileRepository()
@@ -186,7 +187,10 @@ def delete_media_item(album_id: str, media_id: str) -> dict:
 
 
 @router.post("/{album_id}/suggestions", response_model=AlbumSuggestionResponse)
-def generate_album_suggestions(album_id: str) -> dict:
+def generate_album_suggestions(
+    album_id: str,
+    request: GenerateAlbumSuggestionsRequest | None = Body(default=None),
+) -> dict:
     album = repository.refresh_album_media_metadata(album_id)
     if album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
@@ -194,7 +198,14 @@ def generate_album_suggestions(album_id: str) -> dict:
     if not album.get("media_items"):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Album has no media items yet.")
 
-    suggestion = suggestion_service.generate(album)
+    suggestion = suggestion_service.generate(
+        album,
+        reel_variant_request=(
+            request.reel_variant_request.model_dump(exclude_none=True)
+            if request and request.reel_variant_request
+            else None
+        ),
+    )
     repository.save_cached_suggestion(album_id, suggestion)
     return suggestion
 
@@ -212,6 +223,54 @@ def update_album_reel_draft(album_id: str, request: UpdateReelDraftRequest) -> d
         existing_draft=cached_suggestion.get("reel_draft"),
     )
     cached_suggestion["reel_draft"] = reel_draft
+    updated_album = repository.save_cached_suggestion(album_id, cached_suggestion)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
+
+
+@router.post("/{album_id}/reel-draft/versions", response_model=AlbumResponse)
+def save_album_reel_draft_version(album_id: str, request: SaveReelDraftVersionRequest) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
+    reel_draft = suggestion_service.rebuild_reel_draft(
+        album,
+        request.reel_draft.model_dump(),
+        existing_draft=cached_suggestion.get("reel_draft"),
+    )
+    cached_suggestion["reel_draft_versions"] = suggestion_service.save_reel_draft_version(
+        album,
+        reel_draft,
+        existing_versions=cached_suggestion.get("reel_draft_versions"),
+        label=request.label,
+    )
+    updated_album = repository.save_cached_suggestion(album_id, cached_suggestion)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
+
+
+@router.delete("/{album_id}/reel-draft/versions/{version_id}", response_model=AlbumResponse)
+def delete_album_reel_draft_version(album_id: str, version_id: str) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
+    existing_versions = cached_suggestion.get("reel_draft_versions")
+    next_versions = suggestion_service.delete_reel_draft_version(
+        album,
+        existing_versions,
+        version_id=version_id,
+    )
+    existing_count = len(existing_versions) if isinstance(existing_versions, list) else 0
+    if len(next_versions) == existing_count:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft version not found.")
+
+    cached_suggestion["reel_draft_versions"] = next_versions
     updated_album = repository.save_cached_suggestion(album_id, cached_suggestion)
     if updated_album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")

@@ -390,6 +390,12 @@ button {
   box-shadow: none;
 }
 
+.button-chip.active {
+  background: rgba(20, 108, 106, 0.16);
+  border-color: rgba(20, 108, 106, 0.34);
+  color: var(--text);
+}
+
 .status {
   min-height: 24px;
   font-size: 14px;
@@ -429,6 +435,29 @@ button {
 
 .selected-album-card span {
   color: var(--muted);
+  line-height: 1.5;
+}
+
+.ai-variant-request-card {
+  display: grid;
+  gap: 10px;
+}
+
+.variant-mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.variant-custom-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.variant-helper-text {
+  color: var(--muted);
+  font-size: 13px;
   line-height: 1.5;
 }
 
@@ -957,7 +986,8 @@ button {
   .hero-stats,
   .meta-grid,
   .ai-grid,
-  .reel-draft-grid {
+  .reel-draft-grid,
+  .variant-custom-grid {
     grid-template-columns: 1fr;
   }
 

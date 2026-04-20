@@ -179,6 +179,39 @@ type ReelDraft = {
   render_spec: ReelRenderSpec | null;
 };
 
+type ReelDraftVersion = {
+  version_id: string;
+  label: string;
+  created_at: string;
+  updated_at: string;
+  reel_draft: ReelDraft;
+};
+
+type ReelDraftVariant = {
+  variant_id: string;
+  label: string;
+  target_duration_seconds: number;
+  creative_angle: string;
+  reel_plan: ReelPlan | null;
+  reel_draft: ReelDraft;
+};
+
+type ReelVariantRequestSummary = {
+  mode: "auto" | "preset" | "custom_range";
+  label: string;
+  preset_variant_id: string | null;
+  target_duration_seconds: number | null;
+  min_duration_seconds: number | null;
+  max_duration_seconds: number | null;
+};
+
+type ReelVariantPreset = {
+  variant_id: string;
+  label: string;
+  target_duration_seconds: number;
+  creative_angle: string;
+};
+
 type AlbumSuggestion = {
   album_summary: string;
   visual_trip_story: string;
@@ -191,10 +224,15 @@ type AlbumSuggestion = {
   reel_candidates: CurationCandidate[];
   reel_plan: ReelPlan | null;
   reel_draft: ReelDraft | null;
+  reel_draft_variants: ReelDraftVariant[];
+  reel_draft_versions: ReelDraftVersion[];
+  reel_variant_request_summary: ReelVariantRequestSummary | null;
   shot_groups: ShotGroup[];
   analysis_mode: string;
   route: Record<string, unknown> | null;
 };
+
+type ReelSuggestionMode = "auto" | "preset" | "custom_range";
 
 type AutoDescriptionResponse = {
   album: Album;
@@ -249,6 +287,31 @@ function formatDuration(seconds: number): string {
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = Math.round(seconds % 60);
   return `${minutes}m ${remainingSeconds}s`;
+}
+
+function formatEditableDurationValue(seconds: number): string {
+  return Number.isInteger(seconds) ? `${seconds.toFixed(0)}` : `${seconds.toFixed(1)}`;
+}
+
+function formatReelVariantRequestSummary(summary: ReelVariantRequestSummary | null | undefined): string {
+  if (!summary) {
+    return "Auto lets AI pick one best duration from the current album.";
+  }
+
+  if (summary.mode === "custom_range") {
+    const minimum = summary.min_duration_seconds ?? 0;
+    const maximum = summary.max_duration_seconds ?? 0;
+    const chosen = summary.target_duration_seconds;
+    return chosen !== null
+      ? `${summary.label} • AI chose ${formatEditableDurationValue(chosen)}s within that range.`
+      : summary.label;
+  }
+
+  if (summary.mode === "preset") {
+    return `${summary.label} • fixed target length for this reel suggestion.`;
+  }
+
+  return summary.label;
 }
 
 function formatFrameRate(frameRate: number): string {
@@ -564,6 +627,13 @@ function buildReelDraftEditPayload(draft: ReelDraft) {
   };
 }
 
+function areReelDraftsEquivalent(left: ReelDraft | null | undefined, right: ReelDraft | null | undefined): boolean {
+  if (!left || !right) {
+    return false;
+  }
+  return JSON.stringify(buildReelDraftEditPayload(left)) === JSON.stringify(buildReelDraftEditPayload(right));
+}
+
 function downloadJsonFile(filename: string, payload: unknown) {
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
@@ -861,10 +931,17 @@ export default function Page() {
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
   const [isRenderingReel, setIsRenderingReel] = useState(false);
   const [isSavingReelDraft, setIsSavingReelDraft] = useState(false);
+  const [isSavingReelDraftVersion, setIsSavingReelDraftVersion] = useState(false);
+  const [deletingReelDraftVersionId, setDeletingReelDraftVersionId] = useState<string | null>(null);
   const [editableReelDraft, setEditableReelDraft] = useState<ReelDraft | null>(null);
   const [maxReelClipDurationSeconds, setMaxReelClipDurationSeconds] = useState(
     DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS,
   );
+  const [reelVariantPresets, setReelVariantPresets] = useState<ReelVariantPreset[]>([]);
+  const [reelSuggestionMode, setReelSuggestionMode] = useState<ReelSuggestionMode>("auto");
+  const [selectedReelPresetId, setSelectedReelPresetId] = useState("");
+  const [customRangeMinSeconds, setCustomRangeMinSeconds] = useState("10");
+  const [customRangeMaxSeconds, setCustomRangeMaxSeconds] = useState("15");
   const [draggedReelStepIndex, setDraggedReelStepIndex] = useState<number | null>(null);
   const [dragOverReelStepIndex, setDragOverReelStepIndex] = useState<number | null>(null);
   const [isPending, startTransition] = useTransition();
@@ -873,13 +950,15 @@ export default function Page() {
   const workflowAlbum =
     albumMode === "new" ? albums.find((album) => album.id === newAlbumId) ?? null : sidebarAlbum;
   const activeSuggestions = workflowAlbum ? suggestionsByAlbum[workflowAlbum.id] ?? null : null;
+  const suggestedReelVariants = activeSuggestions?.reel_draft_variants ?? [];
+  const savedReelDraftVersions = activeSuggestions?.reel_draft_versions ?? [];
+  const activeReelVariantSummary = activeSuggestions?.reel_variant_request_summary ?? null;
   const activeDescriptionMeta = workflowAlbum ? descriptionMetaByAlbum[workflowAlbum.id] ?? null : null;
   const workingReelDraft = editableReelDraft ?? activeSuggestions?.reel_draft ?? null;
   const isReelDraftDirty = Boolean(
     editableReelDraft &&
       activeSuggestions?.reel_draft &&
-      JSON.stringify(buildReelDraftEditPayload(editableReelDraft)) !==
-        JSON.stringify(buildReelDraftEditPayload(activeSuggestions.reel_draft))
+      !areReelDraftsEquivalent(editableReelDraft, activeSuggestions.reel_draft)
   );
   const renderSpec =
     !isReelDraftDirty && workingReelDraft?.render_spec ? workingReelDraft.render_spec : activeSuggestions?.reel_draft?.render_spec ?? null;
@@ -887,6 +966,7 @@ export default function Page() {
   const uploadTargetAlbum = workflowAlbum;
   const showUploadStep = Boolean(uploadTargetAlbum);
   const showPostUploadSteps = Boolean(workflowAlbum && workflowAlbum.media_items.length > 0);
+  const selectedReelPreset = reelVariantPresets.find((preset) => preset.variant_id === selectedReelPresetId) ?? null;
   const duplicateAlbum =
     albumMode === "new" && !newAlbumId && name.trim()
       ? albums.find((album) => normalizeAlbumName(album.name) === normalizeAlbumName(name))
@@ -958,11 +1038,17 @@ export default function Page() {
 
       const data = (await response.json()) as {
         editor_limits?: { max_reel_clip_duration_seconds?: number };
+        reel_variant_presets?: ReelVariantPreset[];
       };
       const nextLimit = getProjectReelClipDurationCap(
         data.editor_limits?.max_reel_clip_duration_seconds,
       );
       setMaxReelClipDurationSeconds(nextLimit);
+      const nextPresets = Array.isArray(data.reel_variant_presets) ? data.reel_variant_presets : [];
+      if (nextPresets.length > 0) {
+        setReelVariantPresets(nextPresets);
+        setSelectedReelPresetId((current) => current || nextPresets[0].variant_id);
+      }
     } catch {
       // Fall back to the local default when runtime metadata is unavailable.
     }
@@ -1728,6 +1814,69 @@ export default function Page() {
     }
   }
 
+  function buildReelSuggestionRequestBody(): {
+    requestBody: Record<string, unknown>;
+    selectionLabel: string;
+  } {
+    if (reelSuggestionMode === "preset") {
+      const preset = selectedReelPreset ?? reelVariantPresets[0];
+      if (!preset) {
+        throw new Error("Reel length presets are still loading. Try again in a moment.");
+      }
+
+      return {
+        requestBody: {
+          reel_variant_request: {
+            mode: "preset",
+            preset_variant_id: preset.variant_id,
+          },
+        },
+        selectionLabel: preset.label,
+      };
+    }
+
+    if (reelSuggestionMode === "custom_range") {
+      const minimum = Number.parseFloat(customRangeMinSeconds);
+      const maximum = Number.parseFloat(customRangeMaxSeconds);
+      if (!Number.isFinite(minimum) || !Number.isFinite(maximum)) {
+        throw new Error("Custom range needs valid min and max durations.");
+      }
+      if (minimum <= 0 || maximum <= 0) {
+        throw new Error("Custom range durations must be greater than zero.");
+      }
+      if (minimum > maximum) {
+        throw new Error("Custom range min duration must be less than or equal to the max.");
+      }
+      const presetDurations = reelVariantPresets.map((preset) => preset.target_duration_seconds);
+      const minimumAllowed = presetDurations.length > 0 ? Math.min(...presetDurations) : 10;
+      const maximumAllowed = presetDurations.length > 0 ? Math.max(...presetDurations) : 30;
+      const boundedMinimum = roundToTenth(Math.min(Math.max(minimum, minimumAllowed), maximumAllowed));
+      const boundedMaximum = roundToTenth(Math.min(Math.max(maximum, minimumAllowed), maximumAllowed));
+
+        return {
+          requestBody: {
+            reel_variant_request: {
+              mode: "custom_range",
+              min_duration_seconds: boundedMinimum,
+              max_duration_seconds: Math.max(boundedMinimum, boundedMaximum),
+            },
+          },
+          selectionLabel: `Custom ${formatEditableDurationValue(boundedMinimum)}s to ${formatEditableDurationValue(
+            Math.max(boundedMinimum, boundedMaximum),
+          )}s`,
+        };
+      }
+
+    return {
+      requestBody: {
+        reel_variant_request: {
+          mode: "auto",
+        },
+      },
+      selectionLabel: "Auto",
+    };
+  }
+
   async function runAiSuggestions(albumId: string, successMessage?: string) {
     setIsAnalyzing(true);
     setSuggestionStatus({
@@ -1736,8 +1885,11 @@ export default function Page() {
     });
 
     try {
+      const { requestBody, selectionLabel } = buildReelSuggestionRequestBody();
       const response = await fetch(`${API_BASE_URL}/albums/${albumId}/suggestions`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
       });
 
       if (!response.ok) {
@@ -1748,7 +1900,7 @@ export default function Page() {
       setSuggestionsByAlbum((current) => ({ ...current, [albumId]: data }));
       setSuggestionStatus({
         tone: "ok",
-        message: successMessage ?? "AI review updated for this album.",
+        message: successMessage ?? `AI review updated for ${selectionLabel}.`,
       });
     } catch (error) {
       setSuggestionStatus({
@@ -2159,6 +2311,104 @@ export default function Page() {
     } finally {
       setIsSavingReelDraft(false);
     }
+  }
+
+  async function handleSaveReelDraftVersion() {
+    if (!workflowAlbum || !workingReelDraft) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album and make sure a reel draft exists before saving a version.",
+      });
+      return;
+    }
+
+    setIsSavingReelDraftVersion(true);
+    setSuggestionStatus({
+      tone: "idle",
+      message: "Saving the current reel draft as a new version...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/reel-draft/versions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(buildReelDraftEditPayload(workingReelDraft)),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not save draft version (${response.status})`);
+      }
+
+      const updatedAlbum = (await response.json()) as Album;
+      syncAlbumStateFromApi(updatedAlbum);
+      setSuggestionStatus({
+        tone: "ok",
+        message: "Saved the current reel draft as a new version.",
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not save draft version.",
+      });
+    } finally {
+      setIsSavingReelDraftVersion(false);
+    }
+  }
+
+  function handleLoadReelDraftVersion(version: ReelDraftVersion) {
+    setEditableReelDraft(cloneReelDraft(version.reel_draft));
+    setSuggestionStatus({
+      tone: "ok",
+      message: `Loaded saved version "${version.label}" into the editor. Apply or render when you are ready.`,
+    });
+  }
+
+  async function handleDeleteReelDraftVersion(versionId: string) {
+    if (!workflowAlbum) {
+      return;
+    }
+
+    setDeletingReelDraftVersionId(versionId);
+    setSuggestionStatus({
+      tone: "idle",
+      message: "Deleting saved reel draft version...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/reel-draft/versions/${versionId}`, {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not delete draft version (${response.status})`);
+      }
+
+      const updatedAlbum = (await response.json()) as Album;
+      syncAlbumStateFromApi(updatedAlbum);
+      setSuggestionStatus({
+        tone: "ok",
+        message: "Saved reel draft version deleted.",
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not delete draft version.",
+      });
+    } finally {
+      setDeletingReelDraftVersionId(null);
+    }
+  }
+
+  function handleLoadReelVariant(variant: ReelDraftVariant) {
+    setEditableReelDraft(cloneReelDraft(variant.reel_draft));
+    setSuggestionStatus({
+      tone: "ok",
+      message: `Loaded AI variant "${variant.label}" into the editor. Re-render or save it as a version when ready.`,
+    });
   }
 
   async function handleRenderReel() {
@@ -2732,6 +2982,83 @@ export default function Page() {
                     </button>
                   </div>
 
+                  <div className="selected-album-card ai-variant-request-card">
+                    <strong>Reel target</strong>
+                    <div className="variant-mode-row">
+                      <button
+                        className={`button-secondary button-chip${reelSuggestionMode === "auto" ? " active" : ""}`}
+                        onClick={() => setReelSuggestionMode("auto")}
+                        type="button"
+                      >
+                        Auto
+                      </button>
+                      {reelVariantPresets.map((preset) => (
+                        <button
+                          className={`button-secondary button-chip${
+                            reelSuggestionMode === "preset" && selectedReelPresetId === preset.variant_id ? " active" : ""
+                          }`}
+                          key={preset.variant_id}
+                          onClick={() => {
+                            setReelSuggestionMode("preset");
+                            setSelectedReelPresetId(preset.variant_id);
+                          }}
+                          type="button"
+                        >
+                          {formatEditableDurationValue(preset.target_duration_seconds)}s
+                        </button>
+                      ))}
+                      <button
+                        className={`button-secondary button-chip${reelSuggestionMode === "custom_range" ? " active" : ""}`}
+                        onClick={() => setReelSuggestionMode("custom_range")}
+                        type="button"
+                      >
+                        Custom range
+                      </button>
+                    </div>
+
+                    {reelSuggestionMode === "preset" && selectedReelPreset ? (
+                      <span className="variant-helper-text">
+                        {selectedReelPreset.label} • {selectedReelPreset.creative_angle}
+                      </span>
+                    ) : null}
+
+                    {reelSuggestionMode === "custom_range" ? (
+                      <div className="variant-custom-grid">
+                        <label className="draft-field">
+                          <span>Min duration</span>
+                          <input
+                            className="draft-input"
+                            inputMode="decimal"
+                            onChange={(event) => setCustomRangeMinSeconds(event.target.value)}
+                            value={customRangeMinSeconds}
+                          />
+                        </label>
+                        <label className="draft-field">
+                          <span>Max duration</span>
+                          <input
+                            className="draft-input"
+                            inputMode="decimal"
+                            onChange={(event) => setCustomRangeMaxSeconds(event.target.value)}
+                            value={customRangeMaxSeconds}
+                          />
+                        </label>
+                      </div>
+                    ) : null}
+
+                    <span className="variant-helper-text">
+                      {reelSuggestionMode === "custom_range"
+                        ? "Custom range lets AI pick one best reel length inside the min/max window."
+                        : reelSuggestionMode === "preset"
+                          ? "Preset mode generates one reel suggestion for the selected target length."
+                          : "Auto lets AI pick one best duration from the current album."}
+                    </span>
+                    {activeReelVariantSummary ? (
+                      <span className="variant-helper-text">
+                        Last AI build: {formatReelVariantRequestSummary(activeReelVariantSummary)}
+                      </span>
+                    ) : null}
+                  </div>
+
                   <div
                     className={`status ${
                       suggestionStatus.tone === "error" ? "error" : suggestionStatus.tone === "ok" ? "ok" : ""
@@ -2873,6 +3200,51 @@ export default function Page() {
                       <div className="ai-card ai-card-wide">
                         <div className="reel-plan-header">
                           <div>
+                            <strong>{suggestedReelVariants.length > 1 ? "AI reel variants" : "AI reel suggestion"}</strong>
+                            <p>
+                              {suggestedReelVariants.length > 1
+                                ? "Compare a few different target lengths and pacing ideas first, then load one into the editor for manual changes."
+                                : "Load the current AI reel suggestion into the editor, then fine-tune it before rendering."}
+                            </p>
+                          </div>
+                        </div>
+                        {suggestedReelVariants.length > 0 ? (
+                          <div className="candidate-list">
+                            {suggestedReelVariants.map((variant) => {
+                              const matchesEditor = areReelDraftsEquivalent(workingReelDraft, variant.reel_draft);
+                              return (
+                                <div className="candidate-row" key={variant.variant_id}>
+                                  <div>
+                                    <strong>{variant.label}</strong>
+                                    <span>
+                                      {formatDuration(variant.target_duration_seconds)} • {variant.creative_angle} •{" "}
+                                      {formatVideoStrategy(variant.reel_draft.video_strategy)}
+                                      {matchesEditor ? " • loaded in editor" : ""}
+                                    </span>
+                                    <span>
+                                      {variant.reel_draft.steps.length} beat(s) • {variant.reel_draft.title}
+                                    </span>
+                                  </div>
+                                  <div className="actions">
+                                    <button
+                                      className="button-secondary button-chip"
+                                      onClick={() => handleLoadReelVariant(variant)}
+                                      type="button"
+                                    >
+                                      Load into editor
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p>No AI reel variants yet.</p>
+                        )}
+                      </div>
+                      <div className="ai-card ai-card-wide">
+                        <div className="reel-plan-header">
+                          <div>
                             <strong>Reel draft export</strong>
                             <p>
                               {workingReelDraft
@@ -2890,6 +3262,14 @@ export default function Page() {
                                   Copy render commands
                                 </button>
                               ) : null}
+                              <button
+                                className="button-secondary"
+                                disabled={!workingReelDraft || isSavingReelDraftVersion}
+                                onClick={() => void handleSaveReelDraftVersion()}
+                                type="button"
+                              >
+                                {isSavingReelDraftVersion ? "Saving version..." : "Save as version"}
+                              </button>
                               <button
                                 className="button-secondary"
                                 disabled={!isReelDraftDirty || isSavingReelDraft}
@@ -3043,6 +3423,57 @@ export default function Page() {
                                   </div>
                                 ))}
                               </div>
+                            </div>
+                            <div className="ai-card ai-card-wide">
+                              <div className="reel-plan-header">
+                                <div>
+                                  <strong>Saved versions</strong>
+                                  <p>
+                                    Save alternate draft ideas here, then load one back into the editor whenever you want to
+                                    compare or continue it.
+                                  </p>
+                                </div>
+                              </div>
+                              {savedReelDraftVersions.length > 0 ? (
+                                <div className="candidate-list">
+                                  {savedReelDraftVersions.map((version) => {
+                                    const matchesEditor = areReelDraftsEquivalent(workingReelDraft, version.reel_draft);
+                                    return (
+                                      <div className="candidate-row" key={version.version_id}>
+                                        <div>
+                                          <strong>{version.label}</strong>
+                                          <span>
+                                            {version.reel_draft.steps.length} beat(s) •{" "}
+                                            {formatDuration(version.reel_draft.estimated_total_duration_seconds)} •{" "}
+                                            {formatVideoStrategy(version.reel_draft.video_strategy)}
+                                            {matchesEditor ? " • matches editor" : ""}
+                                          </span>
+                                          <span>saved {formatDate(version.updated_at)}</span>
+                                        </div>
+                                        <div className="actions">
+                                          <button
+                                            className="button-secondary button-chip"
+                                            onClick={() => handleLoadReelDraftVersion(version)}
+                                            type="button"
+                                          >
+                                            Load into editor
+                                          </button>
+                                          <button
+                                            className="button-danger button-chip"
+                                            disabled={deletingReelDraftVersionId === version.version_id}
+                                            onClick={() => void handleDeleteReelDraftVersion(version.version_id)}
+                                            type="button"
+                                          >
+                                            {deletingReelDraftVersionId === version.version_id ? "Deleting..." : "Delete"}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              ) : (
+                                <p>No saved versions yet. Save the current draft when you want an alternate edit path.</p>
+                              )}
                             </div>
                             <div className="ai-card ai-card-wide">
                               <div className="reel-plan-header">

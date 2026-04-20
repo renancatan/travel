@@ -65,6 +65,7 @@ Review and AI analysis:
 - draft-step reordering now supports drag-and-drop in addition to move up/down buttons
 - still-image beats now support framing controls so the user can fit the full image or fill/crop the frame and adjust focus before rendering
 - draft-step editing now includes a live per-step preview so image framing and video clip-window changes are visible before re-render
+- reel drafts now support saved alternate versions so the user can snapshot multiple edit ideas, reload them into the editor, and delete old versions
 
 ## What Has Been Built
 
@@ -191,6 +192,7 @@ Implemented in `apps/web`:
 - The local API is expected on `http://127.0.0.1:8000`
 - If the browser shows fetch errors again, first verify the API with `/healthz` before assuming the frontend flow is broken
 - `GET /runtime` now reports media tooling availability so it is easy to see whether `ffmpeg` / `ffprobe` are installed locally
+- `GET /runtime` now also exposes reel-variant preset metadata so the frontend duration selector can stay in sync with the backend presets
 
 ## Known Gaps
 
@@ -211,12 +213,40 @@ Implemented in `apps/web`:
   - swap assets per beat
   - adjust clip windows and durations
   - edit title, caption, and cover
-- the editor now supports add/remove beats, drag-and-drop reordering, audio mode changes, and still-image framing, but it still does not support multiple saved draft versions
+- the editor now supports add/remove beats, drag-and-drop reordering, audio mode changes, still-image framing, live step previews, and saved alternate draft versions
 - `Reset edits` currently resets the local editor to the last saved/applied draft, not all the way back to a fresh AI rebuild; `Refresh AI read` is the closer "start from AI again" action today
-- AI still produces a single main reel draft at a time; it does not yet suggest multiple reel variants across different target lengths or creative angles
-- the product direction for later is:
-  - let AI suggest multiple reel candidates such as 10s, 20s, and 30s
+- there is also an open UX question around reel draft saving:
+  - whether `Save as version` should implicitly apply/save the current active edits
+  - whether `Apply draft edits` should remain a separate action or be simplified later
+- a simple reel-wide filter layer is now on the roadmap before map work:
+  - likely brightness, contrast, saturation
+  - one final-reel control set instead of per-step filters
+- AI now generates first-pass reel variants at different target lengths:
+  - `Quick 10s`
+  - `Story 15s`
+  - `Extended 30s`
+- users can now choose the reel-target mode before running AI review:
+  - `Auto`
+  - `10s`
+  - `15s`
+  - `30s`
+  - `Custom range`
+- users can load one suggested AI variant into the editor before continuing with manual edits
+- there is now also a UX note to revisit later:
+  - after selecting a reel target, the current step flow still feels a bit confusing
+  - likely direction is to simplify the post-selection flow and delay deeper editing until one variant is clearly chosen
+- longer hero-video variants now try to spread reused clips across distinct non-overlapping windows instead of repeating the same slice when one strong video is reused several times
+- longer variants also now lean on a broader candidate pool and can switch into more still-heavy storytelling instead of overusing one hero video
+- the current fixed variant presets now live in one backend file for easier future tuning:
+  - [services/api/app/core/reel_variant_presets.py](/home/renancatan/renan/projects/travel/services/api/app/core/reel_variant_presets.py)
+- remaining follow-up work for reel variants is:
+  - make `Auto` smarter about content richness and pacing instead of relying on the current first-pass heuristic
+  - improve `Custom range` so it picks stronger cuts inside user-provided windows such as:
+    - `10s to 12s`
+    - `10s to 15s`
+    - `15s to 25s`
   - allow several variants within one target length
+  - support stronger creative-angle differences and audience targets
   - only then expose deeper editing for the selected reel variant(s)
 - no live map update flow yet
 - no S3/R2 abstraction wired for production storage yet
@@ -235,7 +265,9 @@ Implemented in `apps/web`:
 9. Improve the curation scoring so it reflects actual aesthetic quality better.
 10. Improve audio handling beyond source-audio preservation with soundtrack selection, gain control, and mix rules.
 11. Continue expanding the reel editor with alternate saved draft versions.
-12. Add AI-generated reel variants across different target lengths and creative angles, then gate deeper editing behind selecting the desired variant(s).
+12. Validate the new AI reel variants across 10s / 20s / 30s albums and refine how different they feel in practice.
+13. Add multiple variants within the same target length and stronger creative-angle separation.
+14. Gate deeper editing behind selecting the desired reel variant(s).
 
 ## Working Rules For Future Changes
 
@@ -265,6 +297,13 @@ Implemented in `apps/web`:
 - validate the new reel `render_spec` output with real albums and mixed media
 - validate rendered reel quality with real albums and mixed media
 - validate the new mute/remove-audio toggle with real albums and mixed media
+- validate the new AI reel selector and variants together:
+  - `Auto`
+  - `Quick 10s`
+  - `Story 15s`
+  - `Extended 30s`
+  - `Custom range`
+- validate that 15s / 30s hero-video variants no longer reuse the same clip window repeatedly
 - improve reel selection so videos become:
   - one chosen hero clip
   - or a sequence of selected moments across multiple videos
@@ -272,7 +311,7 @@ Implemented in `apps/web`:
 - improve rendered reel quality now that the real backend render step is validated
 - improve source-audio handling with soundtrack support and mixing controls
 - continue expanding manual reel editing beyond the current add/remove/drag-reorder/image-framing controls
-- add multiple AI reel variants with different target lengths and creative angles
+- add multiple AI reel variants within the same target length and across stronger creative angles
 - show deeper editing controls after the user picks the reel variant(s) they want to keep
 - define the first “post candidate” output contract
 - start storage abstraction for local vs cloud backends

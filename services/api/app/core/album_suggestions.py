@@ -4,8 +4,10 @@ import json
 import os
 import re
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 try:
     from google import genai
@@ -15,6 +17,7 @@ except ImportError:  # pragma: no cover - optional dependency path
     types = None
 
 from services.api.app.core.llm_router import MultiProviderRouter
+from services.api.app.core.reel_variant_presets import get_reel_variant_presets
 from services.api.app.core.settings import get_settings
 
 SUPPORTED_IMAGE_MIME_TYPES = {
@@ -41,7 +44,12 @@ class AlbumSuggestionService:
         self.storage_root = Path(settings.local_storage_root).expanduser().resolve()
         self.max_reel_clip_duration_seconds = float(settings.max_reel_clip_duration_seconds)
 
-    def generate(self, album: dict[str, Any]) -> dict[str, Any]:
+    def generate(
+        self,
+        album: dict[str, Any],
+        *,
+        reel_variant_request: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         multimodal_parts = self._build_multimodal_parts(album) if self.gemini_client and types else []
         if self.gemini_client and multimodal_parts:
             try:
@@ -59,6 +67,7 @@ class AlbumSuggestionService:
                     album,
                     media_insights=data["media_insights"],
                     caption_ideas=data["caption_ideas"],
+                    reel_variant_request=reel_variant_request,
                 )
                 return {
                     **data,
@@ -80,6 +89,7 @@ class AlbumSuggestionService:
             album,
             media_insights=normalized_data["media_insights"],
             caption_ideas=normalized_data["caption_ideas"],
+            reel_variant_request=reel_variant_request,
         )
         return {
             **normalized_data,
@@ -132,9 +142,55 @@ class AlbumSuggestionService:
         return {
             **normalized_data,
             **curation_payload,
+            "reel_draft_variants": self._normalize_reel_draft_variants(
+                album,
+                cached_suggestion.get("reel_draft_variants"),
+            ) or curation_payload.get("reel_draft_variants", []),
+            "reel_draft_versions": self._normalize_reel_draft_versions(
+                album,
+                cached_suggestion.get("reel_draft_versions"),
+            ),
+            "reel_variant_request_summary": self._normalize_reel_variant_request_summary(
+                cached_suggestion.get("reel_variant_request_summary"),
+            ) or curation_payload.get("reel_variant_request_summary"),
             "analysis_mode": str(cached_suggestion.get("analysis_mode") or "cached"),
             "route": cached_suggestion.get("route"),
         }
+
+    def save_reel_draft_version(
+        self,
+        album: dict[str, Any],
+        reel_draft: dict[str, Any],
+        *,
+        existing_versions: Any = None,
+        label: str | None = None,
+    ) -> list[dict[str, Any]]:
+        versions = self._normalize_reel_draft_versions(album, existing_versions)
+        now = datetime.now(UTC).isoformat()
+        saved_label = (
+            str(label or "").strip()
+            or f"Version {len(versions) + 1}"
+        )
+        return [
+            {
+                "version_id": str(uuid4()),
+                "label": saved_label,
+                "created_at": now,
+                "updated_at": now,
+                "reel_draft": reel_draft,
+            },
+            *versions,
+        ][:20]
+
+    def delete_reel_draft_version(
+        self,
+        album: dict[str, Any],
+        existing_versions: Any,
+        *,
+        version_id: str,
+    ) -> list[dict[str, Any]]:
+        versions = self._normalize_reel_draft_versions(album, existing_versions)
+        return [version for version in versions if version.get("version_id") != version_id]
 
     def _build_multimodal_parts(self, album: dict[str, Any]) -> list[types.Part]:
         parts: list[types.Part] = [types.Part.from_text(text=self._build_multimodal_prompt(album))]
@@ -393,6 +449,7 @@ class AlbumSuggestionService:
         *,
         media_insights: list[dict[str, Any]],
         caption_ideas: list[str],
+        reel_variant_request: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         media_items = album.get("media_items", [])
         group_map = self._build_group_map(media_items)
@@ -400,26 +457,509 @@ class AlbumSuggestionService:
         cover_candidates = self._select_candidates(media_items, group_map, target="cover", limit=3)
         carousel_candidates = self._select_candidates(media_items, group_map, target="carousel", limit=5)
         reel_candidates = self._select_candidates(media_items, group_map, target="reel", limit=4)
-        reel_plan = self._build_reel_plan(
+        reel_variants, reel_variant_request_summary = self._build_reel_draft_variants(
             album,
             cover_candidates=cover_candidates,
             carousel_candidates=carousel_candidates,
             reel_candidates=reel_candidates,
             media_insights=media_insights,
+            caption_ideas=caption_ideas,
+            reel_variant_request=reel_variant_request,
         )
+        primary_variant = reel_variants[0] if reel_variants else None
 
         return {
             "cover_candidates": cover_candidates,
             "carousel_candidates": carousel_candidates,
             "reel_candidates": reel_candidates,
-            "reel_plan": reel_plan,
-            "reel_draft": self._build_reel_draft(
-                album,
-                reel_plan=reel_plan,
-                caption_ideas=caption_ideas,
-            ),
+            "reel_plan": primary_variant.get("reel_plan") if primary_variant else None,
+            "reel_draft": primary_variant.get("reel_draft") if primary_variant else None,
+            "reel_draft_variants": reel_variants,
+            "reel_draft_versions": [],
+            "reel_variant_request_summary": reel_variant_request_summary,
             "shot_groups": shot_groups,
         }
+
+    def _normalize_reel_variant_request_summary(self, raw_summary: Any) -> dict[str, Any] | None:
+        if not isinstance(raw_summary, dict):
+            return None
+
+        mode = str(raw_summary.get("mode") or "").strip()
+        if mode not in {"auto", "preset", "custom_range"}:
+            return None
+
+        normalized_summary: dict[str, Any] = {
+            "mode": mode,
+            "label": str(raw_summary.get("label") or mode).strip() or mode,
+        }
+        preset_variant_id = str(raw_summary.get("preset_variant_id") or "").strip()
+        if preset_variant_id:
+            normalized_summary["preset_variant_id"] = preset_variant_id
+
+        for field_name in ("target_duration_seconds", "min_duration_seconds", "max_duration_seconds"):
+            value = self._to_float(raw_summary.get(field_name))
+            if value is not None:
+                normalized_summary[field_name] = round(max(0.1, value), 1)
+
+        return normalized_summary
+
+    def _normalize_reel_draft_versions(self, album: dict[str, Any], raw_versions: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_versions, list):
+            return []
+
+        normalized_versions: list[dict[str, Any]] = []
+        for index, raw_version in enumerate(raw_versions, start=1):
+            if not isinstance(raw_version, dict):
+                continue
+
+            raw_reel_draft = raw_version.get("reel_draft")
+            if not isinstance(raw_reel_draft, dict):
+                continue
+
+            try:
+                normalized_reel_draft = self.rebuild_reel_draft(
+                    album,
+                    raw_reel_draft,
+                    existing_draft=raw_reel_draft,
+                )
+            except ValueError:
+                continue
+
+            normalized_versions.append(
+                {
+                    "version_id": str(raw_version.get("version_id") or uuid4()),
+                    "label": str(raw_version.get("label") or f"Version {index}").strip() or f"Version {index}",
+                    "created_at": str(raw_version.get("created_at") or datetime.now(UTC).isoformat()),
+                    "updated_at": str(raw_version.get("updated_at") or raw_version.get("created_at") or datetime.now(UTC).isoformat()),
+                    "reel_draft": normalized_reel_draft,
+                }
+            )
+
+        return normalized_versions
+
+    def _normalize_reel_draft_variants(self, album: dict[str, Any], raw_variants: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_variants, list):
+            return []
+
+        normalized_variants: list[dict[str, Any]] = []
+        for index, raw_variant in enumerate(raw_variants, start=1):
+            if not isinstance(raw_variant, dict):
+                continue
+
+            raw_reel_plan = raw_variant.get("reel_plan")
+            raw_reel_draft = raw_variant.get("reel_draft")
+            if not isinstance(raw_reel_draft, dict):
+                continue
+
+            try:
+                normalized_reel_draft = self.rebuild_reel_draft(
+                    album,
+                    raw_reel_draft,
+                    existing_draft=raw_reel_draft,
+                )
+            except ValueError:
+                continue
+
+            normalized_variants.append(
+                {
+                    "variant_id": str(raw_variant.get("variant_id") or f"variant-{index}"),
+                    "label": str(raw_variant.get("label") or f"Variant {index}").strip() or f"Variant {index}",
+                    "target_duration_seconds": round(
+                        float(raw_variant.get("target_duration_seconds") or normalized_reel_draft.get("estimated_total_duration_seconds") or 0.0),
+                        1,
+                    ),
+                    "creative_angle": str(raw_variant.get("creative_angle") or "alternate cut").strip() or "alternate cut",
+                    "reel_plan": raw_reel_plan if isinstance(raw_reel_plan, dict) else None,
+                    "reel_draft": normalized_reel_draft,
+                }
+            )
+
+        return normalized_variants
+
+    def _build_reel_draft_variants(
+        self,
+        album: dict[str, Any],
+        *,
+        cover_candidates: list[dict[str, Any]],
+        carousel_candidates: list[dict[str, Any]],
+        reel_candidates: list[dict[str, Any]],
+        media_insights: list[dict[str, Any]],
+        caption_ideas: list[str],
+        reel_variant_request: dict[str, Any] | None = None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        media_by_id = {item["id"]: item for item in album.get("media_items", [])}
+        insight_by_id = {
+            str(insight.get("media_id")): insight
+            for insight in media_insights
+            if isinstance(insight, dict) and insight.get("media_id")
+        }
+        ordered_candidates = self._build_extended_plan_candidates(
+            album.get("media_items", []),
+            reel_candidates,
+            cover_candidates,
+            carousel_candidates,
+        )
+        if not ordered_candidates:
+            return [], None
+
+        variant_specs, request_summary = self._resolve_reel_variant_specs(
+            media_items=album.get("media_items", []),
+            reel_candidates=reel_candidates,
+            carousel_candidates=carousel_candidates,
+            request=reel_variant_request,
+        )
+        if not variant_specs:
+            return [], request_summary
+
+        variants: list[dict[str, Any]] = []
+        for spec in variant_specs:
+            title_seed_index = int(spec.get("title_seed_index") or 0)
+            title_seed = (
+                caption_ideas[title_seed_index]
+                if 0 <= title_seed_index < len(caption_ideas)
+                else caption_ideas[0]
+                if caption_ideas
+                else ""
+            )
+            reel_plan = self._build_reel_plan_variant(
+                album,
+                ordered_candidates=ordered_candidates,
+                media_by_id=media_by_id,
+                insight_by_id=insight_by_id,
+                reel_candidates=reel_candidates,
+                cover_candidates=cover_candidates,
+                role_specs=spec["role_specs"],
+                target_duration_seconds=float(spec["target_duration_seconds"]),
+                max_video_steps=int(spec["max_video_steps"]) if spec.get("max_video_steps") is not None else None,
+            )
+            if not reel_plan:
+                continue
+
+            reel_draft = self._build_reel_draft(
+                album,
+                reel_plan=reel_plan,
+                caption_ideas=[str(title_seed).strip()] if str(title_seed).strip() else caption_ideas,
+            )
+            if not reel_draft:
+                continue
+
+            variants.append(
+                {
+                    "variant_id": str(spec["variant_id"]),
+                    "label": str(spec["label"]),
+                    "target_duration_seconds": round(float(spec["target_duration_seconds"]), 1),
+                    "creative_angle": str(spec["creative_angle"]),
+                    "reel_plan": reel_plan,
+                    "reel_draft": reel_draft,
+                }
+            )
+
+        return variants, request_summary
+
+    def _resolve_reel_variant_specs(
+        self,
+        *,
+        media_items: list[dict[str, Any]],
+        reel_candidates: list[dict[str, Any]],
+        carousel_candidates: list[dict[str, Any]],
+        request: dict[str, Any] | None,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+        presets = get_reel_variant_presets()
+        preset_by_id = {str(preset["variant_id"]): preset for preset in presets}
+        mode = str((request or {}).get("mode") or "auto").strip() or "auto"
+
+        if mode == "preset":
+            preset_variant_id = str((request or {}).get("preset_variant_id") or "").strip()
+            preset = preset_by_id.get(preset_variant_id) or (presets[0] if presets else None)
+            if preset is None:
+                return [], None
+            return [preset], {
+                "mode": "preset",
+                "label": str(preset["label"]),
+                "preset_variant_id": str(preset["variant_id"]),
+                "target_duration_seconds": round(float(preset["target_duration_seconds"]), 1),
+            }
+
+        if mode == "custom_range":
+            minimum = self._to_float((request or {}).get("min_duration_seconds"))
+            maximum = self._to_float((request or {}).get("max_duration_seconds"))
+            if minimum is None or maximum is None:
+                return [], None
+            preset_minimum = min(float(preset["target_duration_seconds"]) for preset in presets) if presets else 10.0
+            preset_maximum = max(float(preset["target_duration_seconds"]) for preset in presets) if presets else self.max_reel_clip_duration_seconds
+            minimum = round(min(max(max(0.1, minimum), preset_minimum), preset_maximum), 1)
+            maximum = round(min(max(max(minimum, maximum), preset_minimum), preset_maximum), 1)
+            target_duration_seconds = self._estimate_reel_target_duration(
+                media_items,
+                reel_candidates=reel_candidates,
+                carousel_candidates=carousel_candidates,
+                minimum=minimum,
+                maximum=maximum,
+            )
+            custom_variant = self._build_duration_variant_spec(
+                presets=presets,
+                target_duration_seconds=target_duration_seconds,
+                variant_id=f"custom-{str(target_duration_seconds).replace('.', '-')}",
+                label=f"Custom {target_duration_seconds:.1f}s",
+                creative_angle=f"best cut within {minimum:.1f}s to {maximum:.1f}s",
+            )
+            return [custom_variant], {
+                "mode": "custom_range",
+                "label": f"Custom range {minimum:.1f}s to {maximum:.1f}s",
+                "target_duration_seconds": round(target_duration_seconds, 1),
+                "min_duration_seconds": minimum,
+                "max_duration_seconds": maximum,
+            }
+
+        if not presets:
+            return [], None
+
+        minimum = min(float(preset["target_duration_seconds"]) for preset in presets)
+        maximum = max(float(preset["target_duration_seconds"]) for preset in presets)
+        target_duration_seconds = self._estimate_reel_target_duration(
+            media_items,
+            reel_candidates=reel_candidates,
+            carousel_candidates=carousel_candidates,
+            minimum=minimum,
+            maximum=maximum,
+        )
+        auto_variant = self._build_duration_variant_spec(
+            presets=presets,
+            target_duration_seconds=target_duration_seconds,
+            variant_id=f"auto-{str(target_duration_seconds).replace('.', '-')}",
+            label="Auto pick",
+            creative_angle="AI-selected best length from this album",
+        )
+        return [auto_variant], {
+            "mode": "auto",
+            "label": f"Auto • AI picked {target_duration_seconds:.1f}s",
+            "target_duration_seconds": round(target_duration_seconds, 1),
+        }
+
+    def _build_duration_variant_spec(
+        self,
+        *,
+        presets: list[dict[str, Any]],
+        target_duration_seconds: float,
+        variant_id: str,
+        label: str,
+        creative_angle: str,
+    ) -> dict[str, Any]:
+        base_preset = min(
+            presets,
+            key=lambda preset: abs(float(preset.get("target_duration_seconds") or 0.0) - float(target_duration_seconds)),
+        )
+        return {
+            **base_preset,
+            "variant_id": variant_id,
+            "label": label,
+            "creative_angle": creative_angle,
+            "target_duration_seconds": round(float(target_duration_seconds), 1),
+        }
+
+    def _estimate_reel_target_duration(
+        self,
+        media_items: list[dict[str, Any]],
+        *,
+        reel_candidates: list[dict[str, Any]],
+        carousel_candidates: list[dict[str, Any]],
+        minimum: float,
+        maximum: float,
+    ) -> float:
+        video_items = [item for item in media_items if str(item.get("media_kind") or "") == "video"]
+        image_items = [item for item in media_items if str(item.get("media_kind") or "") == "image"]
+        total_video_duration = sum(max(0.0, float(item.get("duration_seconds") or 0.0)) for item in video_items)
+        strong_video_candidates = sum(
+            1
+            for candidate in reel_candidates
+            if str(candidate.get("media_kind") or "") == "video" and float(candidate.get("score") or 0.0) >= 55.0
+        )
+        strong_image_candidates = sum(
+            1
+            for candidate in carousel_candidates
+            if str(candidate.get("media_kind") or "") == "image" and float(candidate.get("score") or 0.0) >= 45.0
+        )
+
+        richness_score = 0
+        richness_score += min(len(media_items), 8)
+        richness_score += strong_video_candidates * 2
+        richness_score += strong_image_candidates
+        richness_score += min(4, int(total_video_duration // 12))
+        richness_score += min(2, len(image_items) // 3)
+
+        if richness_score >= 12:
+            desired_duration_seconds = 30.0
+        elif richness_score >= 6:
+            desired_duration_seconds = 15.0
+        else:
+            desired_duration_seconds = 10.0
+
+        return round(min(max(desired_duration_seconds, minimum), maximum), 1)
+
+    def _build_reel_plan_variant(
+        self,
+        album: dict[str, Any],
+        *,
+        ordered_candidates: list[dict[str, Any]],
+        media_by_id: dict[str, dict[str, Any]],
+        insight_by_id: dict[str, dict[str, Any]],
+        reel_candidates: list[dict[str, Any]],
+        cover_candidates: list[dict[str, Any]],
+        role_specs: list[dict[str, Any]],
+        target_duration_seconds: float,
+        max_video_steps: int | None,
+    ) -> dict[str, Any] | None:
+        video_strategy, primary_video_id, secondary_video_id = self._decide_video_strategy(
+            reel_candidates,
+            media_by_id=media_by_id,
+        )
+
+        used_still_media_ids: set[str] = set()
+        video_use_counts: dict[str, int] = {}
+        selected_video_windows: dict[str, list[tuple[float, float]]] = {}
+        video_steps_selected = 0
+        steps: list[dict[str, Any]] = []
+        for spec in role_specs:
+            avoid_video = max_video_steps is not None and video_steps_selected >= max_video_steps
+            candidate, source_role = self._pick_candidate_for_reel_role(
+                ordered_candidates,
+                media_by_id=media_by_id,
+                insight_by_id=insight_by_id,
+                used_still_media_ids=used_still_media_ids,
+                primary_video_id=primary_video_id,
+                secondary_video_id=secondary_video_id,
+                video_strategy=video_strategy,
+                role=str(spec["role"]),
+                preferred_kinds=set(spec["preferred_kinds"]),
+                preferred_use_cases=set(spec["preferred_use_cases"]),
+                scene_keywords=set(spec["scene_keywords"]),
+                avoid_video=avoid_video,
+            )
+            if candidate is None:
+                continue
+
+            media_item = media_by_id.get(candidate["media_id"])
+            if media_item is None:
+                continue
+
+            insight = insight_by_id.get(candidate["media_id"])
+            media_kind = str(media_item.get("media_kind") or "unknown")
+            selection_mode = "full_frame"
+            clip_start_seconds = None
+            clip_end_seconds = None
+            if media_kind == "video":
+                usage_index = video_use_counts.get(candidate["media_id"], 0)
+                clip_start_seconds, clip_end_seconds = self._select_video_clip_window(
+                    media_item,
+                    role=str(spec["role"]),
+                    usage_index=usage_index,
+                    existing_windows=selected_video_windows.get(candidate["media_id"], []),
+                )
+                video_use_counts[candidate["media_id"]] = usage_index + 1
+                if clip_start_seconds is not None and clip_end_seconds is not None:
+                    selected_video_windows.setdefault(candidate["media_id"], []).append(
+                        (clip_start_seconds, clip_end_seconds)
+                    )
+                selection_mode = "video_clip"
+                video_steps_selected += 1
+            else:
+                used_still_media_ids.add(candidate["media_id"])
+
+            steps.append(
+                {
+                    "step_number": len(steps) + 1,
+                    "role": str(spec["role"]),
+                    "media_id": candidate["media_id"],
+                    "media_kind": media_kind,
+                    "source_role": source_role,
+                    "selection_mode": selection_mode,
+                    "clip_start_seconds": clip_start_seconds,
+                    "clip_end_seconds": clip_end_seconds,
+                    "suggested_duration_seconds": round(
+                        self._suggest_reel_step_duration(media_item, role=str(spec["role"])),
+                        1,
+                    ),
+                    "edit_instruction": self._build_reel_step_instruction(media_item, role=str(spec["role"])),
+                    "why": self._build_reel_step_reason(candidate, insight),
+                }
+            )
+
+        if not steps:
+            return None
+
+        retimed_steps = self._retime_reel_plan_steps(
+            steps,
+            media_by_id=media_by_id,
+            target_duration_seconds=target_duration_seconds,
+        )
+        estimated_total_duration_seconds = round(
+            sum(float(step["suggested_duration_seconds"]) for step in retimed_steps),
+            1,
+        )
+        cover_media_id = cover_candidates[0]["media_id"] if cover_candidates else retimed_steps[0]["media_id"]
+        return {
+            "cover_media_id": cover_media_id,
+            "video_strategy": self._derive_video_strategy_from_steps(retimed_steps),
+            "estimated_total_duration_seconds": estimated_total_duration_seconds,
+            "steps": retimed_steps,
+        }
+
+    def _retime_reel_plan_steps(
+        self,
+        steps: list[dict[str, Any]],
+        *,
+        media_by_id: dict[str, dict[str, Any]],
+        target_duration_seconds: float,
+    ) -> list[dict[str, Any]]:
+        if not steps:
+            return []
+
+        base_total = sum(float(step.get("suggested_duration_seconds") or 0.0) for step in steps)
+        if base_total <= 0:
+            return steps
+
+        scale = target_duration_seconds / base_total
+        retimed_steps: list[dict[str, Any]] = []
+        video_use_counts: dict[str, int] = {}
+
+        for step in steps:
+            media_id = str(step.get("media_id") or "")
+            media_item = media_by_id.get(media_id)
+            if media_item is None:
+                retimed_steps.append(step)
+                continue
+
+            next_step = dict(step)
+            scaled_duration = round(max(0.3, float(step.get("suggested_duration_seconds") or 0.0) * scale), 1)
+            if str(step.get("media_kind") or "") == "video":
+                usage_index = video_use_counts.get(media_id, 0)
+                clip_start_seconds = self._to_float(step.get("clip_start_seconds"))
+                normalized_start, normalized_end = self._normalize_video_window(
+                    media_item,
+                    role=str(step.get("role") or "Beat"),
+                    clip_start_seconds=clip_start_seconds,
+                    clip_end_seconds=(clip_start_seconds or 0.0) + scaled_duration if clip_start_seconds is not None else None,
+                    usage_index=usage_index,
+                )
+                video_use_counts[media_id] = usage_index + 1
+                next_step["clip_start_seconds"] = normalized_start
+                next_step["clip_end_seconds"] = normalized_end
+                next_step["suggested_duration_seconds"] = round(max(0.3, normalized_end - normalized_start), 1)
+            else:
+                next_step["suggested_duration_seconds"] = round(
+                    min(self.max_reel_clip_duration_seconds, max(0.5, scaled_duration)),
+                    1,
+                )
+
+            retimed_steps.append(next_step)
+
+        return [
+            {
+                **step,
+                "step_number": index + 1,
+            }
+            for index, step in enumerate(retimed_steps)
+        ]
 
     def rebuild_reel_draft(
         self,
@@ -857,6 +1397,7 @@ class AlbumSuggestionService:
 
         used_still_media_ids: set[str] = set()
         video_use_counts: dict[str, int] = {}
+        selected_video_windows: dict[str, list[tuple[float, float]]] = {}
         steps: list[dict[str, Any]] = []
         for spec in role_specs:
             candidate, source_role = self._pick_candidate_for_reel_role(
@@ -890,8 +1431,13 @@ class AlbumSuggestionService:
                     media_item,
                     role=spec["role"],
                     usage_index=usage_index,
+                    existing_windows=selected_video_windows.get(candidate["media_id"], []),
                 )
                 video_use_counts[candidate["media_id"]] = usage_index + 1
+                if clip_start_seconds is not None and clip_end_seconds is not None:
+                    selected_video_windows.setdefault(candidate["media_id"], []).append(
+                        (clip_start_seconds, clip_end_seconds)
+                    )
                 selection_mode = "video_clip"
             else:
                 used_still_media_ids.add(candidate["media_id"])
@@ -1078,6 +1624,43 @@ class AlbumSuggestionService:
                 merged.append(candidate)
                 seen_media_ids.add(media_id)
         return merged
+
+    def _build_extended_plan_candidates(
+        self,
+        media_items: list[dict[str, Any]],
+        *candidate_sets: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        merged = self._merge_plan_candidates(*candidate_sets)
+        seen_media_ids = {str(candidate.get("media_id") or "").strip() for candidate in merged}
+
+        fallback_candidates: list[dict[str, Any]] = []
+        for media_item in media_items:
+            media_id = str(media_item.get("id") or "").strip()
+            if not media_id or media_id in seen_media_ids:
+                continue
+
+            base_score = self._base_rank_score(media_item)
+            if base_score <= 0:
+                continue
+
+            fallback_candidates.append(
+                {
+                    "media_id": media_id,
+                    "media_kind": str(media_item.get("media_kind") or "unknown"),
+                    "score": round(base_score, 1),
+                    "reason": "fallback album candidate",
+                    "group_id": None,
+                }
+            )
+
+        fallback_candidates.sort(
+            key=lambda item: (
+                -float(item.get("score") or 0.0),
+                item.get("media_kind") != "image",
+                item.get("media_id"),
+            )
+        )
+        return merged + fallback_candidates
 
     def _build_reel_render_spec(self, reel_draft: dict[str, Any]) -> dict[str, Any]:
         backend_available = shutil.which("ffmpeg") is not None
@@ -1304,13 +1887,27 @@ class AlbumSuggestionService:
         preferred_kinds: set[str],
         preferred_use_cases: set[str],
         scene_keywords: set[str],
+        avoid_video: bool = False,
     ) -> tuple[dict[str, Any] | None, str]:
-        if role == "Hook" and primary_video_id:
+        if avoid_video:
+            still_candidate = self._pick_still_candidate_for_role(
+                ordered_candidates,
+                media_by_id=media_by_id,
+                insight_by_id=insight_by_id,
+                used_still_media_ids=used_still_media_ids,
+                preferred_use_cases=preferred_use_cases,
+                scene_keywords=scene_keywords,
+                role=role,
+            )
+            if still_candidate is not None:
+                return still_candidate, "still_image"
+
+        if not avoid_video and role == "Hook" and primary_video_id:
             candidate = self._find_candidate_by_media_id(ordered_candidates, primary_video_id)
             if candidate is not None:
                 return candidate, "hero_video"
 
-        if role == "Establish":
+        if not avoid_video and role == "Establish":
             if video_strategy == "multi_clip_sequence" and secondary_video_id:
                 candidate = self._find_candidate_by_media_id(ordered_candidates, secondary_video_id)
                 if candidate is not None:
@@ -1333,16 +1930,31 @@ class AlbumSuggestionService:
             if still_candidate is not None:
                 return still_candidate, "still_image"
 
+        effective_preferred_kinds = preferred_kinds
+        if avoid_video:
+            effective_preferred_kinds = {kind for kind in preferred_kinds if kind != "video"} or {"image"}
+
         candidate = self._pick_reel_plan_candidate(
             ordered_candidates,
             media_by_id,
             insight_by_id,
             used_still_media_ids,
-            preferred_kinds=preferred_kinds,
+            preferred_kinds=effective_preferred_kinds,
             preferred_use_cases=preferred_use_cases,
             scene_keywords=scene_keywords,
             role=role,
         )
+        if candidate is None and avoid_video:
+            candidate = self._pick_reel_plan_candidate(
+                ordered_candidates,
+                media_by_id,
+                insight_by_id,
+                used_still_media_ids,
+                preferred_kinds=preferred_kinds,
+                preferred_use_cases=preferred_use_cases,
+                scene_keywords=scene_keywords,
+                role=role,
+            )
         if candidate is None:
             return None, "still_image"
 
@@ -1472,6 +2084,7 @@ class AlbumSuggestionService:
         *,
         role: str,
         usage_index: int,
+        existing_windows: list[tuple[float, float]] | None = None,
     ) -> tuple[float | None, float | None]:
         duration = self._to_float(media_item.get("duration_seconds"))
         if duration is None or duration <= 0:
@@ -1483,23 +2096,132 @@ class AlbumSuggestionService:
             for timestamp in (media_item.get("analysis_frame_timestamps_seconds") or [])
             if self._to_float(timestamp) is not None and 0 <= float(timestamp) <= duration
         ]
-        if not timestamps:
-            timestamps = [round(duration * anchor, 2) for anchor in (0.18, 0.5, 0.82)]
+        candidate_windows = self._build_video_window_candidates(
+            duration_seconds=duration,
+            suggested_duration_seconds=suggested_duration,
+            analysis_timestamps=timestamps,
+            role=role,
+        )
+        if not candidate_windows:
+            start = max(0.0, min(duration - suggested_duration, duration * 0.18))
+            end = min(duration, start + suggested_duration)
+            return round(start, 2), round(end, 2)
 
-        role_index = {
-            "Hook": 0,
-            "Establish": 1,
-            "Detail": 1,
-            "Closer": 2,
-        }.get(role, 1)
-        chosen_index = min(role_index + usage_index, len(timestamps) - 1)
-        anchor_timestamp = timestamps[max(chosen_index, 0)]
+        normalized_existing_windows = existing_windows or []
+        available_windows = [
+            window
+            for window in candidate_windows
+            if all(self._window_overlap_ratio(window, previous_window) < 0.55 for previous_window in normalized_existing_windows)
+        ]
+        if available_windows:
+            start, end = available_windows[0]
+            return round(start, 2), round(end, 2)
 
-        start = max(0.0, anchor_timestamp - (suggested_duration / 2))
-        if start + suggested_duration > duration:
-            start = max(0.0, duration - suggested_duration)
-        end = min(duration, start + suggested_duration)
+        distinct_windows: list[tuple[float, float]] = []
+        for window in candidate_windows:
+            if not distinct_windows:
+                distinct_windows.append(window)
+                continue
+
+            if all(self._window_overlap_ratio(window, previous_window) < 0.55 for previous_window in distinct_windows):
+                distinct_windows.append(window)
+
+        if distinct_windows:
+            chosen_index = min(max(usage_index, 0), len(distinct_windows) - 1)
+            start, end = distinct_windows[chosen_index]
+            return round(start, 2), round(end, 2)
+
+        chosen_index = min(max(usage_index, 0), len(candidate_windows) - 1)
+        start, end = candidate_windows[chosen_index]
         return round(start, 2), round(end, 2)
+
+    def _build_video_window_candidates(
+        self,
+        *,
+        duration_seconds: float,
+        suggested_duration_seconds: float,
+        analysis_timestamps: list[float],
+        role: str,
+    ) -> list[tuple[float, float]]:
+        if duration_seconds <= 0:
+            return []
+
+        normalized_duration = max(0.5, min(suggested_duration_seconds, duration_seconds))
+        role_target_ratios = {
+            "Hook": [0.12, 0.2, 0.3, 0.45, 0.62, 0.8],
+            "Establish": [0.28, 0.4, 0.55, 0.7, 0.18, 0.85],
+            "Explore": [0.48, 0.6, 0.36, 0.74, 0.24, 0.88],
+            "Journey": [0.5, 0.64, 0.38, 0.78, 0.26, 0.9],
+            "Reveal": [0.7, 0.82, 0.56, 0.42, 0.26, 0.92],
+            "Scale": [0.66, 0.8, 0.5, 0.34, 0.9],
+            "Texture": [0.42, 0.56, 0.3, 0.7, 0.18, 0.84],
+            "Detail": [0.44, 0.58, 0.32, 0.72, 0.2, 0.86],
+            "Closer": [0.82, 0.7, 0.56, 0.4, 0.92],
+        }.get(role, [0.5, 0.36, 0.64, 0.22, 0.82])
+
+        base_anchor_count = max(6, min(10, int(duration_seconds / max(1.5, normalized_duration / 1.8)) + 2))
+        timeline_timestamps = [
+            round(duration_seconds * ((index + 1) / (base_anchor_count + 1)), 2)
+            for index in range(base_anchor_count)
+        ]
+
+        raw_anchors: list[tuple[str, float]] = []
+        for timestamp in analysis_timestamps:
+            raw_anchors.append(("analysis", float(timestamp)))
+        for timestamp in timeline_timestamps:
+            raw_anchors.append(("timeline", float(timestamp)))
+
+        def window_from_anchor(anchor_timestamp: float) -> tuple[float, float]:
+            start = max(0.0, anchor_timestamp - (normalized_duration / 2))
+            if start + normalized_duration > duration_seconds:
+                start = max(0.0, duration_seconds - normalized_duration)
+            end = min(duration_seconds, start + normalized_duration)
+            return round(start, 2), round(end, 2)
+
+        ranked_windows: list[tuple[float, float, float, float]] = []
+        seen_window_keys: set[tuple[float, float]] = set()
+
+        for source_kind, anchor_timestamp in raw_anchors:
+            if anchor_timestamp < 0 or anchor_timestamp > duration_seconds:
+                continue
+
+            start, end = window_from_anchor(anchor_timestamp)
+            if end - start < 0.3:
+                continue
+
+            window_key = (round(start, 1), round(end, 1))
+            if window_key in seen_window_keys:
+                continue
+            seen_window_keys.add(window_key)
+
+            anchor_ratio = anchor_timestamp / duration_seconds if duration_seconds > 0 else 0.5
+            closest_role_distance = min(abs(anchor_ratio - ratio) for ratio in role_target_ratios)
+            primary_target_distance = abs(anchor_ratio - role_target_ratios[0])
+            sampled_bonus = -0.035 if source_kind == "analysis" else 0.0
+            ranked_windows.append(
+                (
+                    round(closest_role_distance + sampled_bonus, 6),
+                    round(primary_target_distance, 6),
+                    start,
+                    end,
+                )
+            )
+
+        ranked_windows.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
+        return [(start, end) for _, _, start, end in ranked_windows]
+
+    @staticmethod
+    def _window_overlap_ratio(
+        first_window: tuple[float, float],
+        second_window: tuple[float, float],
+    ) -> float:
+        first_start, first_end = first_window
+        second_start, second_end = second_window
+        overlap_start = max(first_start, second_start)
+        overlap_end = min(first_end, second_end)
+        overlap = max(0.0, overlap_end - overlap_start)
+        shortest_window = max(0.1, min(first_end - first_start, second_end - second_start))
+        return overlap / shortest_window
 
     def _suggest_reel_step_duration(self, media_item: dict[str, Any], *, role: str) -> float:
         media_kind = str(media_item.get("media_kind") or "unknown")

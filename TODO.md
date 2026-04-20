@@ -65,11 +65,30 @@
   - remove beats from the AI draft
 - [x] Add live per-step previews in the reel editor so image framing and video clip windows are visible before re-render.
 - [ ] Continue expanding manual reel editing:
-  - save alternate draft versions
-- [ ] Add AI reel variants:
-  - suggest multiple reel drafts with different target lengths such as 10s, 20s, and 30s
+  - richer soundtrack selection and mixing controls
+- [x] Save alternate draft versions and load/delete them from the reel editor.
+- [ ] Add a simple final-reel filter layer before map work:
+  - one reel-wide filter control set, not per-step
+  - likely first controls: brightness, contrast, saturation
+  - apply it at render time and preview it in the editor if feasible
+- [x] Add first-pass AI reel variants across target lengths:
+  - suggest multiple reel drafts such as 10s, 15s, and 30s
+  - let the user load one suggested variant into the editor
+- [x] Add an explicit reel target selector for AI review:
+  - `Auto`
+  - `10s`
+  - `15s`
+  - `30s`
+  - `Custom range`
+  - centralize preset lengths in:
+    - [services/api/app/core/reel_variant_presets.py](/home/renancatan/renan/projects/travel/services/api/app/core/reel_variant_presets.py)
+- [ ] Expand AI reel variants further:
+  - refine the new `Auto` / `10s` / `15s` / `30s` / `Custom range` selector with better duration-picking logic
+  - make `Auto` smarter about content richness, not just a first-pass heuristic
+  - make `Custom range` better at choosing the strongest cut inside a user-provided interval
   - generate multiple variants within the same target length without making them too similar
   - support different creative angles or audience targets across those variants
+  - keep longer hero-video variants from feeling repetitive when one strong video is reused several times
 - [ ] Show advanced reel editing only after the user selects which suggested reel variant(s) they want to keep.
 - [ ] Normalize exports for social-ready output sizes and frame rates.
 - [ ] Keep all AI decisions explainable in the UI.
@@ -79,6 +98,13 @@
 ## Small UI fixes
 
 - [x] Fix duplicate image filename display on media cards.
+- [ ] Revisit reel draft save UX:
+  - decide whether `Save as version` should also apply/save the active draft edits
+  - decide whether `Apply draft edits` should stay separate or be merged into a simpler action model
+- [ ] Revisit the reel-range / variant flow UX:
+  - the current selector-to-editor progression feels a bit confusing
+  - simplify the number of visible decisions after picking a reel target
+  - likely defer deeper editing until after one variant is clearly chosen
 
 ## Phase 4: Map Experience
 

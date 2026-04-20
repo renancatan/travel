@@ -1,6 +1,43 @@
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel
+from pydantic import Field
+from pydantic import model_validator
+
+
+class ReelVariantRequestInput(BaseModel):
+    mode: Literal["auto", "preset", "custom_range"] = "auto"
+    preset_variant_id: str | None = Field(default=None, max_length=80)
+    min_duration_seconds: float | None = Field(default=None, gt=0)
+    max_duration_seconds: float | None = Field(default=None, gt=0)
+
+    @model_validator(mode="after")
+    def validate_request(self) -> "ReelVariantRequestInput":
+        if self.mode == "preset" and not self.preset_variant_id:
+            raise ValueError("preset_variant_id is required when mode is preset.")
+
+        if self.mode == "custom_range":
+            if self.min_duration_seconds is None or self.max_duration_seconds is None:
+                raise ValueError("min_duration_seconds and max_duration_seconds are required for custom_range.")
+            if self.min_duration_seconds > self.max_duration_seconds:
+                raise ValueError("min_duration_seconds must be less than or equal to max_duration_seconds.")
+
+        return self
+
+
+class GenerateAlbumSuggestionsRequest(BaseModel):
+    reel_variant_request: ReelVariantRequestInput | None = None
+
+
+class ReelVariantRequestSummaryResponse(BaseModel):
+    mode: Literal["auto", "preset", "custom_range"]
+    label: str
+    preset_variant_id: str | None = None
+    target_duration_seconds: float | None = None
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
 
 class MediaInsightResponse(BaseModel):
@@ -92,6 +129,23 @@ class ReelDraftResponse(BaseModel):
     render_spec: "ReelRenderSpecResponse | None"
 
 
+class ReelDraftVersionResponse(BaseModel):
+    version_id: str
+    label: str
+    created_at: str
+    updated_at: str
+    reel_draft: ReelDraftResponse
+
+
+class ReelDraftVariantResponse(BaseModel):
+    variant_id: str
+    label: str
+    target_duration_seconds: float
+    creative_angle: str
+    reel_plan: ReelPlanResponse | None
+    reel_draft: ReelDraftResponse
+
+
 class ReelRenderClipResponse(BaseModel):
     step_number: int
     role: str
@@ -132,6 +186,9 @@ class AlbumSuggestionResponse(BaseModel):
     reel_candidates: list[CurationCandidateResponse]
     reel_plan: ReelPlanResponse | None
     reel_draft: ReelDraftResponse | None
+    reel_draft_variants: list[ReelDraftVariantResponse] = []
+    reel_draft_versions: list[ReelDraftVersionResponse] = []
+    reel_variant_request_summary: ReelVariantRequestSummaryResponse | None = None
     shot_groups: list[ShotGroupResponse]
     analysis_mode: str
     route: dict | None
