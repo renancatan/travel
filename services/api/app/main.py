@@ -49,6 +49,7 @@ def runtime() -> dict[str, object]:
         "media_tooling": get_media_tooling_status(),
         "editor_limits": {
             "max_reel_clip_duration_seconds": settings.max_reel_clip_duration_seconds,
+            "max_reel_target_duration_seconds": settings.max_reel_target_duration_seconds,
         },
         "reel_variant_presets": get_reel_variant_runtime_presets(),
         "providers": {

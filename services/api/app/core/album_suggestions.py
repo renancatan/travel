@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 import re
@@ -43,6 +44,7 @@ class AlbumSuggestionService:
         self.local_storage_root = settings.local_storage_root
         self.storage_root = Path(settings.local_storage_root).expanduser().resolve()
         self.max_reel_clip_duration_seconds = float(settings.max_reel_clip_duration_seconds)
+        self.max_reel_target_duration_seconds = float(settings.max_reel_target_duration_seconds)
 
     def generate(
         self,
@@ -612,7 +614,13 @@ class AlbumSuggestionService:
             return [], request_summary
 
         variants: list[dict[str, Any]] = []
+        seen_variant_signatures: set[str] = set()
         for spec in variant_specs:
+            candidate_pool = self._order_candidates_for_variant(
+                ordered_candidates,
+                media_by_id,
+                candidate_mode=str(spec.get("candidate_mode") or "default"),
+            )
             title_seed_index = int(spec.get("title_seed_index") or 0)
             title_seed = (
                 caption_ideas[title_seed_index]
@@ -623,7 +631,7 @@ class AlbumSuggestionService:
             )
             reel_plan = self._build_reel_plan_variant(
                 album,
-                ordered_candidates=ordered_candidates,
+                ordered_candidates=candidate_pool,
                 media_by_id=media_by_id,
                 insight_by_id=insight_by_id,
                 reel_candidates=reel_candidates,
@@ -642,6 +650,22 @@ class AlbumSuggestionService:
             )
             if not reel_draft:
                 continue
+
+            variant_signature = json.dumps(
+                [
+                    {
+                        "media_id": step["media_id"],
+                        "selection_mode": step["selection_mode"],
+                        "clip_start_seconds": step.get("clip_start_seconds"),
+                        "clip_end_seconds": step.get("clip_end_seconds"),
+                    }
+                    for step in reel_draft.get("steps", [])
+                ],
+                sort_keys=True,
+            )
+            if variant_signature in seen_variant_signatures:
+                continue
+            seen_variant_signatures.add(variant_signature)
 
             variants.append(
                 {
@@ -673,7 +697,12 @@ class AlbumSuggestionService:
             preset = preset_by_id.get(preset_variant_id) or (presets[0] if presets else None)
             if preset is None:
                 return [], None
-            return [preset], {
+            return self._expand_variant_family(
+                preset,
+                target_duration_seconds=float(preset["target_duration_seconds"]),
+                family_label=str(preset["label"]),
+                request_mode="preset",
+            ), {
                 "mode": "preset",
                 "label": str(preset["label"]),
                 "preset_variant_id": str(preset["variant_id"]),
@@ -685,10 +714,14 @@ class AlbumSuggestionService:
             maximum = self._to_float((request or {}).get("max_duration_seconds"))
             if minimum is None or maximum is None:
                 return [], None
-            preset_minimum = min(float(preset["target_duration_seconds"]) for preset in presets) if presets else 10.0
-            preset_maximum = max(float(preset["target_duration_seconds"]) for preset in presets) if presets else self.max_reel_clip_duration_seconds
-            minimum = round(min(max(max(0.1, minimum), preset_minimum), preset_maximum), 1)
-            maximum = round(min(max(max(minimum, maximum), preset_minimum), preset_maximum), 1)
+            minimum = round(min(max(max(1.0, minimum), 1.0), self.max_reel_target_duration_seconds), 1)
+            maximum = round(
+                min(
+                    max(max(minimum, maximum), minimum),
+                    self.max_reel_target_duration_seconds,
+                ),
+                1,
+            )
             target_duration_seconds = self._estimate_reel_target_duration(
                 media_items,
                 reel_candidates=reel_candidates,
@@ -703,7 +736,12 @@ class AlbumSuggestionService:
                 label=f"Custom {target_duration_seconds:.1f}s",
                 creative_angle=f"best cut within {minimum:.1f}s to {maximum:.1f}s",
             )
-            return [custom_variant], {
+            return self._expand_variant_family(
+                custom_variant,
+                target_duration_seconds=target_duration_seconds,
+                family_label="Custom range",
+                request_mode="custom_range",
+            ), {
                 "mode": "custom_range",
                 "label": f"Custom range {minimum:.1f}s to {maximum:.1f}s",
                 "target_duration_seconds": round(target_duration_seconds, 1),
@@ -730,7 +768,12 @@ class AlbumSuggestionService:
             label="Auto pick",
             creative_angle="AI-selected best length from this album",
         )
-        return [auto_variant], {
+        return self._expand_variant_family(
+            auto_variant,
+            target_duration_seconds=target_duration_seconds,
+            family_label="Auto pick",
+            request_mode="auto",
+        ), {
             "mode": "auto",
             "label": f"Auto • AI picked {target_duration_seconds:.1f}s",
             "target_duration_seconds": round(target_duration_seconds, 1),
@@ -787,14 +830,159 @@ class AlbumSuggestionService:
         richness_score += min(4, int(total_video_duration // 12))
         richness_score += min(2, len(image_items) // 3)
 
-        if richness_score >= 12:
+        should_choose_extended = (
+            maximum >= 30.0
+            and len(media_items) >= 8
+            and strong_video_candidates >= 3
+            and len(image_items) >= 3
+            and total_video_duration >= 75.0
+            and strong_image_candidates >= 1
+        )
+
+        if should_choose_extended:
             desired_duration_seconds = 30.0
-        elif richness_score >= 6:
+        elif richness_score >= 7:
             desired_duration_seconds = 15.0
         else:
             desired_duration_seconds = 10.0
 
+        if maximum > 30.0:
+            extension_ratio = min(1.0, max(0.0, (richness_score - 4) / 10))
+            desired_duration_seconds = max(
+                desired_duration_seconds,
+                minimum + ((maximum - minimum) * extension_ratio),
+            )
+
         return round(min(max(desired_duration_seconds, minimum), maximum), 1)
+
+    def _expand_variant_family(
+        self,
+        base_spec: dict[str, Any],
+        *,
+        target_duration_seconds: float,
+        family_label: str,
+        request_mode: str,
+    ) -> list[dict[str, Any]]:
+        creative_profiles = [
+            {
+                "profile_id": "balanced",
+                "label_suffix": "Balanced",
+                "creative_angle": "balanced story",
+                "title_seed_offset": 0,
+                "candidate_mode": "default",
+                "max_video_steps_delta": 0,
+            },
+            {
+                "profile_id": "motion",
+                "label_suffix": "Motion-first",
+                "creative_angle": "motion-led adventure",
+                "title_seed_offset": 1,
+                "candidate_mode": "motion",
+                "max_video_steps_delta": 1,
+            },
+            {
+                "profile_id": "scenic",
+                "label_suffix": "Scenic",
+                "creative_angle": "still-rich scenic journey",
+                "title_seed_offset": 2,
+                "candidate_mode": "scenic",
+                "max_video_steps_delta": -1,
+            },
+        ]
+
+        expanded_specs: list[dict[str, Any]] = []
+        for profile in creative_profiles:
+            base_max_video_steps = int(base_spec.get("max_video_steps") or 0)
+            role_specs = self._build_creative_role_specs(base_spec.get("role_specs") or [], profile_id=str(profile["profile_id"]))
+            variant_label = (
+                f"{family_label} • {profile['label_suffix']}"
+                if request_mode in {"auto", "custom_range"}
+                else str(profile["label_suffix"])
+            )
+            expanded_specs.append(
+                {
+                    **deepcopy(base_spec),
+                    "variant_id": f"{base_spec['variant_id']}-{profile['profile_id']}",
+                    "label": variant_label,
+                    "creative_angle": str(profile["creative_angle"]),
+                    "target_duration_seconds": round(float(target_duration_seconds), 1),
+                    "title_seed_index": int(base_spec.get("title_seed_index") or 0) + int(profile["title_seed_offset"]),
+                    "max_video_steps": max(1, min(len(role_specs), base_max_video_steps + int(profile["max_video_steps_delta"]))),
+                    "candidate_mode": str(profile["candidate_mode"]),
+                    "role_specs": role_specs,
+                }
+            )
+
+        return expanded_specs
+
+    def _build_creative_role_specs(
+        self,
+        base_role_specs: list[dict[str, Any]],
+        *,
+        profile_id: str,
+    ) -> list[dict[str, Any]]:
+        role_specs = deepcopy(base_role_specs)
+        if profile_id == "motion":
+            for spec in role_specs:
+                role = str(spec.get("role") or "")
+                scene_keywords = set(spec.get("scene_keywords") or [])
+                preferred_use_cases = set(spec.get("preferred_use_cases") or [])
+                preferred_kinds = set(spec.get("preferred_kinds") or [])
+                if role in {"Hook", "Establish", "Journey", "Reveal", "Scale"}:
+                    scene_keywords.update({"motion", "movement", "path", "people", "water"})
+                    preferred_use_cases.update({"people", "supporting"})
+                if role in {"Detail", "Closer"}:
+                    preferred_kinds.update({"video"})
+                    scene_keywords.update({"motion", "movement", "light", "path"})
+                    preferred_use_cases.update({"supporting", "people"})
+                spec["preferred_kinds"] = list(preferred_kinds)
+                spec["scene_keywords"] = list(scene_keywords)
+                spec["preferred_use_cases"] = list(preferred_use_cases)
+            return role_specs
+
+        if profile_id == "scenic":
+            for spec in role_specs:
+                role = str(spec.get("role") or "")
+                scene_keywords = set(spec.get("scene_keywords") or [])
+                preferred_use_cases = set(spec.get("preferred_use_cases") or [])
+                preferred_kinds = set(spec.get("preferred_kinds") or [])
+                if role in {"Establish", "Journey", "Texture", "Scale", "Reveal", "Closer"}:
+                    preferred_kinds.update({"image"})
+                    scene_keywords.update({"view", "light", "forest", "formation", "texture", "outside"})
+                    preferred_use_cases.update({"detail", "cover"})
+                spec["preferred_kinds"] = list(preferred_kinds)
+                spec["scene_keywords"] = list(scene_keywords)
+                spec["preferred_use_cases"] = list(preferred_use_cases)
+            return role_specs
+
+        return role_specs
+
+    def _order_candidates_for_variant(
+        self,
+        ordered_candidates: list[dict[str, Any]],
+        media_by_id: dict[str, dict[str, Any]],
+        *,
+        candidate_mode: str,
+    ) -> list[dict[str, Any]]:
+        if candidate_mode == "motion":
+            return sorted(
+                ordered_candidates,
+                key=lambda candidate: (
+                    0 if str(media_by_id.get(str(candidate.get("media_id") or ""), {}).get("media_kind") or "") == "video" else 1,
+                    -float(candidate.get("score") or 0.0),
+                ),
+            )
+
+        if candidate_mode == "scenic":
+            return sorted(
+                ordered_candidates,
+                key=lambda candidate: (
+                    0 if str(media_by_id.get(str(candidate.get("media_id") or ""), {}).get("media_kind") or "") == "image" else 1,
+                    -float(candidate.get("score") or 0.0),
+                ),
+            )
+
+        return ordered_candidates
 
     def _build_reel_plan_variant(
         self,
@@ -887,6 +1075,7 @@ class AlbumSuggestionService:
         if not steps:
             return None
 
+        steps = self._group_reel_steps_by_media_flow(steps)
         retimed_steps = self._retime_reel_plan_steps(
             steps,
             media_by_id=media_by_id,
@@ -959,6 +1148,37 @@ class AlbumSuggestionService:
                 "step_number": index + 1,
             }
             for index, step in enumerate(retimed_steps)
+        ]
+
+    @staticmethod
+    def _group_reel_steps_by_media_flow(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not steps:
+            return []
+
+        first_video_index_by_media: dict[str, int] = {}
+        grouped_video_steps: dict[str, list[dict[str, Any]]] = {}
+        image_steps: list[dict[str, Any]] = []
+
+        for index, step in enumerate(steps):
+            media_kind = str(step.get("media_kind") or "")
+            media_id = str(step.get("media_id") or "")
+            if media_kind == "video" and media_id:
+                first_video_index_by_media.setdefault(media_id, index)
+                grouped_video_steps.setdefault(media_id, []).append(step)
+            else:
+                image_steps.append(step)
+
+        ordered_steps: list[dict[str, Any]] = []
+        for media_id, _ in sorted(first_video_index_by_media.items(), key=lambda item: item[1]):
+            ordered_steps.extend(grouped_video_steps.get(media_id, []))
+        ordered_steps.extend(image_steps)
+
+        return [
+            {
+                **step,
+                "step_number": index + 1,
+            }
+            for index, step in enumerate(ordered_steps)
         ]
 
     def rebuild_reel_draft(
@@ -1464,6 +1684,7 @@ class AlbumSuggestionService:
         if not steps:
             return None
 
+        steps = self._group_reel_steps_by_media_flow(steps)
         cover_media_id = cover_candidates[0]["media_id"] if cover_candidates else steps[0]["media_id"]
         estimated_total_duration_seconds = round(
             sum(step["suggested_duration_seconds"] for step in steps),
@@ -1917,7 +2138,7 @@ class AlbumSuggestionService:
                 if candidate is not None:
                     return candidate, "hero_video"
 
-        if role in {"Detail", "Closer"}:
+        if role in {"Detail", "Closer"} and "video" not in preferred_kinds:
             still_candidate = self._pick_still_candidate_for_role(
                 ordered_candidates,
                 media_by_id=media_by_id,

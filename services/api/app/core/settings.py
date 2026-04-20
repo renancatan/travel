@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     storage_backend: str = "s3"
     queue_backend: str = "sqs"
     max_reel_clip_duration_seconds: float = 30.0
+    max_reel_target_duration_seconds: float = 60.0
 
 
 @lru_cache

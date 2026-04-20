@@ -265,6 +265,7 @@ type AnalysisFrameSample = {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8000";
 const NEW_ALBUM_DRAFT_KEY = "travel-project:new-album-draft";
 const DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS = 30;
+const DEFAULT_MAX_REEL_TARGET_DURATION_SECONDS = 60;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -432,6 +433,13 @@ function getMediaDurationSeconds(mediaItem: MediaItem | null): number | null {
 function getProjectReelClipDurationCap(value: number | null | undefined): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
     return DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS;
+  }
+  return roundToTenth(value);
+}
+
+function getProjectReelTargetDurationCap(value: number | null | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_MAX_REEL_TARGET_DURATION_SECONDS;
   }
   return roundToTenth(value);
 }
@@ -937,6 +945,9 @@ export default function Page() {
   const [maxReelClipDurationSeconds, setMaxReelClipDurationSeconds] = useState(
     DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS,
   );
+  const [maxReelTargetDurationSeconds, setMaxReelTargetDurationSeconds] = useState(
+    DEFAULT_MAX_REEL_TARGET_DURATION_SECONDS,
+  );
   const [reelVariantPresets, setReelVariantPresets] = useState<ReelVariantPreset[]>([]);
   const [reelSuggestionMode, setReelSuggestionMode] = useState<ReelSuggestionMode>("auto");
   const [selectedReelPresetId, setSelectedReelPresetId] = useState("");
@@ -1037,13 +1048,20 @@ export default function Page() {
       }
 
       const data = (await response.json()) as {
-        editor_limits?: { max_reel_clip_duration_seconds?: number };
+        editor_limits?: {
+          max_reel_clip_duration_seconds?: number;
+          max_reel_target_duration_seconds?: number;
+        };
         reel_variant_presets?: ReelVariantPreset[];
       };
       const nextLimit = getProjectReelClipDurationCap(
         data.editor_limits?.max_reel_clip_duration_seconds,
       );
       setMaxReelClipDurationSeconds(nextLimit);
+      const nextTargetLimit = getProjectReelTargetDurationCap(
+        data.editor_limits?.max_reel_target_duration_seconds,
+      );
+      setMaxReelTargetDurationSeconds(nextTargetLimit);
       const nextPresets = Array.isArray(data.reel_variant_presets) ? data.reel_variant_presets : [];
       if (nextPresets.length > 0) {
         setReelVariantPresets(nextPresets);
@@ -1847,9 +1865,8 @@ export default function Page() {
       if (minimum > maximum) {
         throw new Error("Custom range min duration must be less than or equal to the max.");
       }
-      const presetDurations = reelVariantPresets.map((preset) => preset.target_duration_seconds);
-      const minimumAllowed = presetDurations.length > 0 ? Math.min(...presetDurations) : 10;
-      const maximumAllowed = presetDurations.length > 0 ? Math.max(...presetDurations) : 30;
+      const minimumAllowed = 1;
+      const maximumAllowed = maxReelTargetDurationSeconds;
       const boundedMinimum = roundToTenth(Math.min(Math.max(minimum, minimumAllowed), maximumAllowed));
       const boundedMaximum = roundToTenth(Math.min(Math.max(maximum, minimumAllowed), maximumAllowed));
 
@@ -1865,7 +1882,7 @@ export default function Page() {
             Math.max(boundedMinimum, boundedMaximum),
           )}s`,
         };
-      }
+    }
 
     return {
       requestBody: {
@@ -3047,9 +3064,11 @@ export default function Page() {
 
                     <span className="variant-helper-text">
                       {reelSuggestionMode === "custom_range"
-                        ? "Custom range lets AI pick one best reel length inside the min/max window."
+                        ? `Custom range lets AI pick one best reel length inside the min/max window, up to ${formatEditableDurationValue(
+                            maxReelTargetDurationSeconds,
+                          )}s.`
                         : reelSuggestionMode === "preset"
-                          ? "Preset mode generates one reel suggestion for the selected target length."
+                          ? "Preset mode generates multiple creative variants for the selected target length."
                           : "Auto lets AI pick one best duration from the current album."}
                     </span>
                     {activeReelVariantSummary ? (

@@ -84,11 +84,20 @@
     - [services/api/app/core/reel_variant_presets.py](/home/renancatan/renan/projects/travel/services/api/app/core/reel_variant_presets.py)
 - [ ] Expand AI reel variants further:
   - refine the new `Auto` / `10s` / `15s` / `30s` / `Custom range` selector with better duration-picking logic
-  - make `Auto` smarter about content richness, not just a first-pass heuristic
+  - keep tuning `Auto` so `30s` stays a rare, justified choice instead of the default for medium albums
   - make `Custom range` better at choosing the strongest cut inside a user-provided interval
-  - generate multiple variants within the same target length without making them too similar
-  - support different creative angles or audience targets across those variants
+    - including longer windows like `35s to 60s`
+  - keep improving the new same-length variants so `Balanced` / `Motion-first` / `Scenic` feel meaningfully different in practice
+  - support stronger creative angles or audience targets across those variants
   - keep longer hero-video variants from feeling repetitive when one strong video is reused several times
+  - keep checking that AI-generated reels preserve motion flow:
+    - videos first
+    - grouped by source video
+    - images last
+- [ ] Revisit the reel-variant UX:
+  - keep variant selection lightweight before showing deeper editing
+  - do not render all variants by default
+  - consider an optional `render all for compare` action later if real usage proves it is worth it
 - [ ] Show advanced reel editing only after the user selects which suggested reel variant(s) they want to keep.
 - [ ] Normalize exports for social-ready output sizes and frame rates.
 - [ ] Keep all AI decisions explainable in the UI.

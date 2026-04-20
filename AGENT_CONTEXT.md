@@ -231,10 +231,25 @@ Implemented in `apps/web`:
   - `15s`
   - `30s`
   - `Custom range`
+- `Auto` has been rebalanced to be more conservative:
+  - it now prefers `10s` or `15s` for most albums
+  - `30s` is intended to be a rarer choice that needs genuinely richer content
+- AI-generated reel ordering is now stricter:
+  - all video snippets come first
+  - repeated snippets from the same source video stay grouped together
+  - still images only appear after the video block ends
+- for a selected target length, AI can now fan out into same-length creative variants such as:
+  - `Balanced`
+  - `Motion-first`
+  - `Scenic`
 - users can load one suggested AI variant into the editor before continuing with manual edits
 - there is now also a UX note to revisit later:
   - after selecting a reel target, the current step flow still feels a bit confusing
   - likely direction is to simplify the post-selection flow and delay deeper editing until one variant is clearly chosen
+  - likely direction for compare mode is:
+    - keep variant picking lightweight first
+    - avoid rendering all variants by default
+    - consider an optional `render all for compare` flow later if needed
 - longer hero-video variants now try to spread reused clips across distinct non-overlapping windows instead of repeating the same slice when one strong video is reused several times
 - longer variants also now lean on a broader candidate pool and can switch into more still-heavy storytelling instead of overusing one hero video
 - the current fixed variant presets now live in one backend file for easier future tuning:
@@ -245,8 +260,9 @@ Implemented in `apps/web`:
     - `10s to 12s`
     - `10s to 15s`
     - `15s to 25s`
-  - allow several variants within one target length
-  - support stronger creative-angle differences and audience targets
+    - `35s to 60s`
+  - keep improving same-length variants so they feel more meaningfully different in practice
+  - support even stronger creative-angle differences and audience targets
   - only then expose deeper editing for the selected reel variant(s)
 - no live map update flow yet
 - no S3/R2 abstraction wired for production storage yet
@@ -265,8 +281,8 @@ Implemented in `apps/web`:
 9. Improve the curation scoring so it reflects actual aesthetic quality better.
 10. Improve audio handling beyond source-audio preservation with soundtrack selection, gain control, and mix rules.
 11. Continue expanding the reel editor with alternate saved draft versions.
-12. Validate the new AI reel variants across 10s / 20s / 30s albums and refine how different they feel in practice.
-13. Add multiple variants within the same target length and stronger creative-angle separation.
+12. Validate the new AI reel variants across 10s / 15s / 30s albums and refine how different they feel in practice.
+13. Keep improving same-length creative variant separation and audience targeting.
 14. Gate deeper editing behind selecting the desired reel variant(s).
 
 ## Working Rules For Future Changes
@@ -304,6 +320,10 @@ Implemented in `apps/web`:
   - `Extended 30s`
   - `Custom range`
 - validate that 15s / 30s hero-video variants no longer reuse the same clip window repeatedly
+- validate that selected target lengths now produce multiple same-length variants that are meaningfully different:
+  - `Balanced`
+  - `Motion-first`
+  - `Scenic`
 - improve reel selection so videos become:
   - one chosen hero clip
   - or a sequence of selected moments across multiple videos
@@ -311,7 +331,7 @@ Implemented in `apps/web`:
 - improve rendered reel quality now that the real backend render step is validated
 - improve source-audio handling with soundtrack support and mixing controls
 - continue expanding manual reel editing beyond the current add/remove/drag-reorder/image-framing controls
-- add multiple AI reel variants within the same target length and across stronger creative angles
+- keep improving AI reel variants within the same target length and across stronger creative angles
 - show deeper editing controls after the user picks the reel variant(s) they want to keep
 - define the first “post candidate” output contract
 - start storage abstraction for local vs cloud backends
