@@ -463,6 +463,9 @@ class AlbumSuggestionService:
                 suggested_duration_seconds = round(max(0.3, clip_end_seconds - clip_start_seconds), 1)
                 selection_mode = "video_clip"
                 normalized_source_role = source_role or ("hero_video" if index == 1 else "supporting_video")
+                frame_mode = None
+                focus_x_percent = None
+                focus_y_percent = None
             else:
                 clip_start_seconds = None
                 clip_end_seconds = None
@@ -475,6 +478,9 @@ class AlbumSuggestionService:
                 )
                 selection_mode = "full_frame"
                 normalized_source_role = source_role or "still_image"
+                frame_mode = self._normalize_frame_mode(raw_step.get("frame_mode"))
+                focus_x_percent = self._normalize_focus_percent(raw_step.get("focus_x_percent"))
+                focus_y_percent = self._normalize_focus_percent(raw_step.get("focus_y_percent"))
 
             draft_steps.append(
                 {
@@ -488,6 +494,9 @@ class AlbumSuggestionService:
                     "selection_mode": selection_mode,
                     "clip_start_seconds": clip_start_seconds,
                     "clip_end_seconds": clip_end_seconds,
+                    "frame_mode": frame_mode,
+                    "focus_x_percent": focus_x_percent,
+                    "focus_y_percent": focus_y_percent,
                     "relative_path": media_item.get("relative_path", ""),
                     "suggested_duration_seconds": suggested_duration_seconds,
                     "edit_instruction": edit_instruction or self._build_reel_step_instruction(media_item, role=role),
@@ -536,6 +545,13 @@ class AlbumSuggestionService:
             or f"{self._slugify(str(album.get('name') or title))}-reel-draft"
         )
         normalized_cover_media_id = cover_media_id if cover_media_id in media_by_id else draft_steps[0]["media_id"]
+        audio_strategy = self._normalize_audio_strategy(
+            edited_draft.get("audio_strategy")
+            if isinstance(edited_draft, dict) and edited_draft.get("audio_strategy") is not None
+            else existing_draft.get("audio_strategy")
+            if isinstance(existing_draft, dict)
+            else None
+        )
 
         reel_draft = {
             "draft_name": draft_name,
@@ -547,12 +563,34 @@ class AlbumSuggestionService:
             "output_width": 1080,
             "output_height": 1920,
             "fps": 30,
-            "audio_strategy": "preserve source audio on video beats when available; use silent audio for still-image beats or silent clips",
+            "audio_strategy": audio_strategy,
             "steps": draft_steps,
             "assets": assets,
         }
         reel_draft["render_spec"] = self._build_reel_render_spec(reel_draft)
         return reel_draft
+
+    @staticmethod
+    def _normalize_audio_strategy(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"mute_all_audio", "mute", "remove_audio", "silent"}:
+            return "mute_all_audio"
+        return "preserve_source_audio"
+
+    @staticmethod
+    def _normalize_frame_mode(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"cover", "fill"}:
+            return "cover"
+        return "contain"
+
+    @staticmethod
+    def _normalize_focus_percent(value: Any) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = 50.0
+        return round(min(100.0, max(0.0, numeric)), 1)
 
     def _append_video_frame_parts(
         self,
@@ -946,6 +984,9 @@ class AlbumSuggestionService:
                     "selection_mode": str(step.get("selection_mode") or "full_frame"),
                     "clip_start_seconds": self._to_float(step.get("clip_start_seconds")),
                     "clip_end_seconds": self._to_float(step.get("clip_end_seconds")),
+                    "frame_mode": self._normalize_frame_mode(step.get("frame_mode")) if media_item.get("media_kind") == "image" else None,
+                    "focus_x_percent": self._normalize_focus_percent(step.get("focus_x_percent")) if media_item.get("media_kind") == "image" else None,
+                    "focus_y_percent": self._normalize_focus_percent(step.get("focus_y_percent")) if media_item.get("media_kind") == "image" else None,
                     "relative_path": media_item.get("relative_path", ""),
                     "suggested_duration_seconds": round(float(step.get("suggested_duration_seconds") or 0.0), 1),
                     "edit_instruction": str(step.get("edit_instruction") or "").strip() or "Use this asset in the reel sequence.",
@@ -969,7 +1010,7 @@ class AlbumSuggestionService:
             "output_width": 1080,
             "output_height": 1920,
             "fps": 30,
-            "audio_strategy": "preserve source audio on video beats when available; use silent audio for still-image beats or silent clips",
+            "audio_strategy": "preserve_source_audio",
             "steps": draft_steps,
             "assets": assets,
         }
@@ -1040,6 +1081,7 @@ class AlbumSuggestionService:
 
     def _build_reel_render_spec(self, reel_draft: dict[str, Any]) -> dict[str, Any]:
         backend_available = shutil.which("ffmpeg") is not None
+        audio_strategy = self._normalize_audio_strategy(reel_draft.get("audio_strategy"))
         render_dir = f"renders/{reel_draft['draft_name']}"
         concat_relative_path = f"{render_dir}/concat.txt"
         output_relative_path = f"{render_dir}/{reel_draft['draft_name']}.mp4"
@@ -1060,6 +1102,9 @@ class AlbumSuggestionService:
             output_duration_seconds = round(float(step.get("suggested_duration_seconds") or 0.0), 1)
             render_mode = "video_trim" if media_kind == "video" else "image_hold"
             has_audio = bool(step.get("has_audio")) if media_kind == "video" else False
+            frame_mode = self._normalize_frame_mode(step.get("frame_mode")) if media_kind == "image" else None
+            focus_x_percent = self._normalize_focus_percent(step.get("focus_x_percent")) if media_kind == "image" else None
+            focus_y_percent = self._normalize_focus_percent(step.get("focus_y_percent")) if media_kind == "image" else None
 
             clips.append(
                 {
@@ -1073,7 +1118,11 @@ class AlbumSuggestionService:
                     "output_relative_path": output_relative,
                     "clip_start_seconds": clip_start_seconds,
                     "clip_end_seconds": clip_end_seconds,
+                    "frame_mode": frame_mode,
+                    "focus_x_percent": focus_x_percent,
+                    "focus_y_percent": focus_y_percent,
                     "output_duration_seconds": output_duration_seconds,
+                    "audio_strategy": audio_strategy,
                 }
             )
 
@@ -1086,6 +1135,10 @@ class AlbumSuggestionService:
                     output_duration_seconds=output_duration_seconds,
                     clip_start_seconds=clip_start_seconds,
                     clip_end_seconds=clip_end_seconds,
+                    frame_mode=frame_mode,
+                    focus_x_percent=focus_x_percent,
+                    focus_y_percent=focus_y_percent,
+                    audio_strategy=audio_strategy,
                 )
             )
             concat_entries.append(f"file '{Path(output_relative).name}'")
@@ -1105,9 +1158,12 @@ class AlbumSuggestionService:
         notes = [
             "This is a render-ready spec for the future reel worker.",
             "Each step first becomes a normalized 1080x1920 clip, then the clips are concatenated.",
-            "Video beats can preserve source audio when it exists; still-image beats use silent filler audio.",
-            "A richer soundtrack and audio-mixing layer has not been implemented yet.",
         ]
+        if audio_strategy == "mute_all_audio":
+            notes.append("All beats are rendered with silent filler audio, even when the source videos include sound.")
+        else:
+            notes.append("Video beats can preserve source audio when it exists; still-image beats use silent filler audio.")
+        notes.append("A richer soundtrack and audio-mixing layer has not been implemented yet.")
         if not backend_available:
             notes.append("ffmpeg is not installed on this machine right now, so these commands are generated but not executed locally.")
 
@@ -1132,19 +1188,23 @@ class AlbumSuggestionService:
         output_duration_seconds: float,
         clip_start_seconds: float | None,
         clip_end_seconds: float | None,
+        frame_mode: str | None,
+        focus_x_percent: float | None,
+        focus_y_percent: float | None,
+        audio_strategy: str,
     ) -> str:
-        vf_chain = (
-            "scale=1080:1920:force_original_aspect_ratio=decrease,"
-            "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
-            "fps=30"
-        )
         if media_kind == "video":
+            vf_chain = (
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+                "fps=30"
+            )
             timing_prefix = ""
             if clip_start_seconds is not None:
                 timing_prefix += f"-ss {clip_start_seconds:.2f} "
             if clip_end_seconds is not None:
                 timing_prefix += f"-to {clip_end_seconds:.2f} "
-            if has_audio:
+            if has_audio and audio_strategy == "preserve_source_audio":
                 return (
                     "ffmpeg -y "
                     f"{timing_prefix}-i {self._shell_quote(source_relative_path)} "
@@ -1163,6 +1223,11 @@ class AlbumSuggestionService:
                 f"{self._shell_quote(output_relative_path)}"
             )
 
+        vf_chain = self._build_image_vf_chain(
+            frame_mode=frame_mode,
+            focus_x_percent=focus_x_percent,
+            focus_y_percent=focus_y_percent,
+        )
         return (
             "ffmpeg -y "
             f"-loop 1 -t {output_duration_seconds:.1f} -i {self._shell_quote(source_relative_path)} "
@@ -1171,6 +1236,29 @@ class AlbumSuggestionService:
             "-map 0:v:0 -map 1:a:0 "
             "-c:v libx264 -pix_fmt yuv420p -c:a aac -ar 48000 -ac 2 -shortest "
             f"{self._shell_quote(output_relative_path)}"
+        )
+
+    def _build_image_vf_chain(
+        self,
+        *,
+        frame_mode: str | None,
+        focus_x_percent: float | None,
+        focus_y_percent: float | None,
+    ) -> str:
+        normalized_frame_mode = self._normalize_frame_mode(frame_mode)
+        if normalized_frame_mode != "cover":
+            return (
+                "scale=1080:1920:force_original_aspect_ratio=decrease,"
+                "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
+                "fps=30"
+            )
+
+        x_ratio = self._normalize_focus_percent(focus_x_percent) / 100
+        y_ratio = self._normalize_focus_percent(focus_y_percent) / 100
+        return (
+            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920:(iw-1080)*{x_ratio:.3f}:(ih-1920)*{y_ratio:.3f},"
+            "fps=30"
         )
 
     @staticmethod

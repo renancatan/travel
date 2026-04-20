@@ -39,6 +39,7 @@
 - [x] Preserve source audio on video beats during local reel rendering, with silent filler audio for still-image beats.
 - [x] Make re-rendering safe when edited drafts reuse the same saved output path.
 - [x] Clamp manual video clip editing to the smaller of the real asset duration and the configured reel clip cap.
+- [x] Add a simple mute/remove-audio option for rendered reels.
 - [ ] Propose:
   - best photo shortlist
   - carousel set
@@ -55,7 +56,6 @@
 - [ ] Add basic aesthetic ranking heuristics before personal-style learning.
 - [ ] Add clip extraction with `ffmpeg`.
 - [ ] Add soundtrack selection and audio-mixing controls on top of the current source-audio-preserving render path.
-- [ ] Add a simple remove-audio / mute option for rendered reels when the user does not want source audio.
 - [x] Add first-pass manual reel editing controls:
   - reorder beats
   - swap chosen assets
@@ -63,8 +63,8 @@
 - [x] Expand manual reel editing:
   - add beats from extra images/videos
   - remove beats from the AI draft
+- [x] Add live per-step previews in the reel editor so image framing and video clip windows are visible before re-render.
 - [ ] Continue expanding manual reel editing:
-  - drag-and-drop reorder
   - save alternate draft versions
 - [ ] Add AI reel variants:
   - suggest multiple reel drafts with different target lengths such as 10s, 20s, and 30s

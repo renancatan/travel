@@ -83,6 +83,7 @@ class ReelRenderer:
             for clip in clips:
                 staged_clip = {
                     **clip,
+                    "audio_strategy": reel_draft.get("audio_strategy"),
                     "output_relative_path": self._swap_render_root(
                         str(clip.get("output_relative_path") or "").strip(),
                         render_root_relative,
@@ -166,6 +167,10 @@ class ReelRenderer:
         output_duration_seconds = float(clip.get("output_duration_seconds") or 0.0)
         clip_start_seconds = self._to_float(clip.get("clip_start_seconds"))
         clip_end_seconds = self._to_float(clip.get("clip_end_seconds"))
+        audio_strategy = self._normalize_audio_strategy(clip.get("audio_strategy"))
+        frame_mode = self._normalize_frame_mode(clip.get("frame_mode"))
+        focus_x_percent = self._normalize_focus_percent(clip.get("focus_x_percent"))
+        focus_y_percent = self._normalize_focus_percent(clip.get("focus_y_percent"))
 
         if not source_relative_path or not output_relative_path:
             raise ReelRenderError("A render clip is missing its source or output path.")
@@ -190,7 +195,7 @@ class ReelRenderer:
                 command.extend(["-ss", f"{clip_start_seconds:.2f}"])
             if clip_end_seconds is not None:
                 command.extend(["-to", f"{clip_end_seconds:.2f}"])
-            if has_audio:
+            if has_audio and audio_strategy == "preserve_source_audio":
                 command.extend(
                     [
                         "-i",
@@ -249,6 +254,11 @@ class ReelRenderer:
         else:
             if output_duration_seconds <= 0:
                 raise ReelRenderError("An image render clip is missing its output duration.")
+            image_vf_chain = self._build_image_vf_chain(
+                frame_mode=frame_mode,
+                focus_x_percent=focus_x_percent,
+                focus_y_percent=focus_y_percent,
+            )
             command.extend(
                 [
                     "-loop",
@@ -264,7 +274,7 @@ class ReelRenderer:
                     "-i",
                     "anullsrc=channel_layout=stereo:sample_rate=48000",
                     "-vf",
-                    VF_CHAIN,
+                    image_vf_chain,
                     "-map",
                     "0:v:0",
                     "-map",
@@ -358,3 +368,43 @@ class ReelRenderer:
             return float(value)
         except (TypeError, ValueError):
             return None
+
+    @staticmethod
+    def _normalize_audio_strategy(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"mute_all_audio", "mute", "remove_audio", "silent"}:
+            return "mute_all_audio"
+        return "preserve_source_audio"
+
+    @staticmethod
+    def _normalize_frame_mode(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"cover", "fill"}:
+            return "cover"
+        return "contain"
+
+    @staticmethod
+    def _normalize_focus_percent(value: Any) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            numeric = 50.0
+        return round(min(100.0, max(0.0, numeric)), 1)
+
+    def _build_image_vf_chain(
+        self,
+        *,
+        frame_mode: str,
+        focus_x_percent: float,
+        focus_y_percent: float,
+    ) -> str:
+        if frame_mode != "cover":
+            return VF_CHAIN
+
+        x_ratio = focus_x_percent / 100
+        y_ratio = focus_y_percent / 100
+        return (
+            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            f"crop=1080:1920:(iw-1080)*{x_ratio:.3f}:(ih-1920)*{y_ratio:.3f},"
+            "fps=30"
+        )

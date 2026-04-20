@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, DragEvent, FormEvent, useEffect, useState, useTransition } from "react";
+import { ChangeEvent, DragEvent, FormEvent, useEffect, useRef, useState, useTransition } from "react";
 
 type MediaItem = {
   id: string;
@@ -126,6 +126,9 @@ type ReelDraftStep = {
   selection_mode: string;
   clip_start_seconds: number | null;
   clip_end_seconds: number | null;
+  frame_mode: string | null;
+  focus_x_percent: number | null;
+  focus_y_percent: number | null;
   relative_path: string;
   suggested_duration_seconds: number;
   edit_instruction: string;
@@ -143,6 +146,9 @@ type ReelRenderClip = {
   output_relative_path: string;
   clip_start_seconds: number | null;
   clip_end_seconds: number | null;
+  frame_mode: string | null;
+  focus_x_percent: number | null;
+  focus_y_percent: number | null;
   output_duration_seconds: number;
 };
 
@@ -286,6 +292,30 @@ function formatVideoStrategy(value: string | null | undefined): string {
   return "mixed sequence";
 }
 
+function normalizeAudioStrategyValue(value: string | null | undefined): "preserve_source_audio" | "mute_all_audio" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "mute_all_audio" || normalized === "mute" || normalized === "remove_audio" || normalized === "silent") {
+    return "mute_all_audio";
+  }
+  return "preserve_source_audio";
+}
+
+function formatAudioStrategy(value: string | null | undefined): string {
+  return normalizeAudioStrategyValue(value) === "mute_all_audio" ? "mute reel audio" : "keep source audio when available";
+}
+
+function normalizeFrameModeValue(value: string | null | undefined): "contain" | "cover" {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (normalized === "cover" || normalized === "fill") {
+    return "cover";
+  }
+  return "contain";
+}
+
+function formatFrameMode(value: string | null | undefined): string {
+  return normalizeFrameModeValue(value) === "cover" ? "fill and crop" : "fit whole image";
+}
+
 function formatSourceRole(value: string): string {
   if (value === "hero_video") {
     return "hero video";
@@ -420,6 +450,21 @@ function normalizeEditableVideoStep(
   };
 }
 
+function normalizeEditableImageStep(
+  step: ReelDraftStep,
+  projectMaxDurationSeconds: number,
+): ReelDraftStep {
+  return {
+    ...step,
+    frame_mode: normalizeFrameModeValue(step.frame_mode),
+    focus_x_percent: roundToTenth(clampNumber(step.focus_x_percent ?? 50, 0, 100)),
+    focus_y_percent: roundToTenth(clampNumber(step.focus_y_percent ?? 50, 0, 100)),
+    suggested_duration_seconds: roundToTenth(
+      clampNumber(step.suggested_duration_seconds, 0.5, projectMaxDurationSeconds),
+    ),
+  };
+}
+
 function getRenderedReelContentUrl(album: Album | null): string | null {
   const renderedReel = album?.rendered_reel;
   if (!album || !renderedReel) {
@@ -430,6 +475,20 @@ function getRenderedReelContentUrl(album: Album | null): string | null {
     `${renderedReel.rendered_at}-${renderedReel.file_size_bytes}-${renderedReel.estimated_total_duration_seconds}`,
   );
   return `${API_BASE_URL}/albums/${album.id}/rendered-reel/content?v=${cacheKey}`;
+}
+
+function getMediaContentUrl(mediaItem: MediaItem | null): string | null {
+  if (!mediaItem) {
+    return null;
+  }
+  return `${API_BASE_URL}/albums/${mediaItem.album_id}/media/${mediaItem.id}/content`;
+}
+
+function getMediaThumbnailUrl(mediaItem: MediaItem | null): string | null {
+  if (!mediaItem?.thumbnail_relative_path) {
+    return null;
+  }
+  return `${API_BASE_URL}/albums/${mediaItem.album_id}/media/${mediaItem.id}/thumbnail`;
 }
 
 function normalizeAlbumName(value: string): string {
@@ -487,6 +546,7 @@ function buildReelDraftEditPayload(draft: ReelDraft) {
       title: draft.title,
       caption: draft.caption,
       cover_media_id: draft.cover_media_id,
+      audio_strategy: normalizeAudioStrategyValue(draft.audio_strategy),
       steps: draft.steps.map((step) => ({
         role: step.role,
         media_id: step.media_id,
@@ -494,6 +554,9 @@ function buildReelDraftEditPayload(draft: ReelDraft) {
         suggested_duration_seconds: step.suggested_duration_seconds,
         clip_start_seconds: step.clip_start_seconds,
         clip_end_seconds: step.clip_end_seconds,
+        frame_mode: step.frame_mode,
+        focus_x_percent: step.focus_x_percent,
+        focus_y_percent: step.focus_y_percent,
         edit_instruction: step.edit_instruction,
         why: step.why,
       })),
@@ -615,6 +678,152 @@ async function seekVideoForFrame(video: HTMLVideoElement, timestamp: number): Pr
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
+type DraftVideoStepPreviewProps = {
+  mediaUrl: string;
+  thumbnailUrl: string | null;
+  clipStartSeconds: number | null;
+  clipEndSeconds: number | null;
+  durationSeconds: number | null;
+};
+
+function DraftVideoStepPreview({
+  mediaUrl,
+  thumbnailUrl,
+  clipStartSeconds,
+  clipEndSeconds,
+  durationSeconds,
+}: DraftVideoStepPreviewProps) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) {
+      return;
+    }
+
+    const startSeconds = Math.max(0, clipStartSeconds ?? 0);
+    const fallbackEndSeconds =
+      clipEndSeconds ?? (durationSeconds !== null ? durationSeconds : startSeconds + 0.3);
+
+    const seekToStart = () => {
+      const safeStartSeconds =
+        Number.isFinite(video.duration) && video.duration > 0
+          ? Math.min(startSeconds, Math.max(video.duration - 0.05, 0))
+          : startSeconds;
+
+      if (Math.abs(video.currentTime - safeStartSeconds) > 0.05) {
+        video.currentTime = safeStartSeconds;
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      seekToStart();
+      void video.play().catch(() => {
+        // Autoplay can be blocked by the browser; the preview still works with manual play.
+      });
+    };
+
+    const handleTimeUpdate = () => {
+      const effectiveEndSeconds =
+        Number.isFinite(video.duration) && video.duration > 0
+          ? Math.min(fallbackEndSeconds, video.duration)
+          : fallbackEndSeconds;
+      if (video.currentTime >= Math.max(startSeconds + 0.05, effectiveEndSeconds - 0.03)) {
+        seekToStart();
+      }
+    };
+
+    const handleEnded = () => {
+      seekToStart();
+    };
+
+    video.addEventListener("loadedmetadata", handleLoadedMetadata);
+    video.addEventListener("timeupdate", handleTimeUpdate);
+    video.addEventListener("ended", handleEnded);
+
+    if (video.readyState >= 1) {
+      handleLoadedMetadata();
+    }
+
+    return () => {
+      video.pause();
+      video.removeEventListener("loadedmetadata", handleLoadedMetadata);
+      video.removeEventListener("timeupdate", handleTimeUpdate);
+      video.removeEventListener("ended", handleEnded);
+    };
+  }, [clipEndSeconds, clipStartSeconds, durationSeconds, mediaUrl]);
+
+  return (
+    <div className="draft-step-preview">
+      <div className="draft-preview-frame draft-preview-frame-video">
+        <video
+          ref={videoRef}
+          autoPlay
+          className="draft-preview-media"
+          controls
+          muted
+          playsInline
+          poster={thumbnailUrl ?? undefined}
+          preload="metadata"
+          src={mediaUrl}
+        />
+      </div>
+      <p className="draft-preview-caption">
+        Live clip preview
+        {formatClipWindow(clipStartSeconds, clipEndSeconds) ? ` • ${formatClipWindow(clipStartSeconds, clipEndSeconds)}` : ""}
+      </p>
+    </div>
+  );
+}
+
+type DraftStepPreviewProps = {
+  step: ReelDraftStep;
+  mediaItem: MediaItem | null;
+};
+
+function DraftStepPreview({ step, mediaItem }: DraftStepPreviewProps) {
+  const mediaUrl = getMediaContentUrl(mediaItem);
+  if (!mediaUrl) {
+    return null;
+  }
+
+  if (step.media_kind === "video") {
+    return (
+      <DraftVideoStepPreview
+        clipEndSeconds={step.clip_end_seconds}
+        clipStartSeconds={step.clip_start_seconds}
+        durationSeconds={mediaItem?.duration_seconds ?? null}
+        mediaUrl={mediaUrl}
+        thumbnailUrl={getMediaThumbnailUrl(mediaItem)}
+      />
+    );
+  }
+
+  const frameMode = normalizeFrameModeValue(step.frame_mode);
+  const focusXPercent = roundToTenth(step.focus_x_percent ?? 50).toFixed(0);
+  const focusYPercent = roundToTenth(step.focus_y_percent ?? 50).toFixed(0);
+
+  return (
+    <div className="draft-step-preview">
+      <div className="draft-preview-frame">
+        <img
+          alt={step.original_filename}
+          className="draft-preview-media"
+          src={mediaUrl}
+          style={{
+            objectFit: frameMode === "cover" ? "cover" : "contain",
+            objectPosition: `${focusXPercent}% ${focusYPercent}%`,
+          }}
+        />
+      </div>
+      <p className="draft-preview-caption">
+        Live frame preview • {formatFrameMode(step.frame_mode)}
+        {frameMode === "cover" ? ` • focus ${focusXPercent}% / ${focusYPercent}%` : ""}
+      </p>
+    </div>
+  );
+}
+
 export default function Page() {
   const [albums, setAlbums] = useState<Album[]>([]);
   const [selectedAlbumId, setSelectedAlbumId] = useState<string | null>(null);
@@ -656,6 +865,8 @@ export default function Page() {
   const [maxReelClipDurationSeconds, setMaxReelClipDurationSeconds] = useState(
     DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS,
   );
+  const [draggedReelStepIndex, setDraggedReelStepIndex] = useState<number | null>(null);
+  const [dragOverReelStepIndex, setDragOverReelStepIndex] = useState<number | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const sidebarAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
@@ -926,6 +1137,9 @@ export default function Page() {
           selection_mode: "video_clip",
           clip_start_seconds: 0,
           clip_end_seconds: roundToTenth(defaultDurationSeconds),
+          frame_mode: null,
+          focus_x_percent: null,
+          focus_y_percent: null,
           relative_path: mediaItem.relative_path,
           suggested_duration_seconds: roundToTenth(defaultDurationSeconds),
           edit_instruction: "Trim this extra beat where the motion is clearest.",
@@ -946,6 +1160,9 @@ export default function Page() {
       selection_mode: "full_frame",
       clip_start_seconds: null,
       clip_end_seconds: null,
+      frame_mode: "contain",
+      focus_x_percent: 50,
+      focus_y_percent: 50,
       relative_path: mediaItem.relative_path,
       suggested_duration_seconds: 1.5,
       edit_instruction: "Hold this added beat briefly or crop it as needed.",
@@ -958,21 +1175,60 @@ export default function Page() {
   }
 
   function moveEditableReelStep(stepIndex: number, direction: -1 | 1) {
+    reorderEditableReelStep(stepIndex, stepIndex + direction);
+  }
+
+  function reorderEditableReelStep(fromIndex: number, toIndex: number) {
     setEditableReelDraft((current) => {
       if (!current) {
         return current;
       }
 
-      const targetIndex = stepIndex + direction;
-      if (targetIndex < 0 || targetIndex >= current.steps.length) {
+      if (fromIndex < 0 || fromIndex >= current.steps.length) {
+        return current;
+      }
+
+      if (toIndex < 0 || toIndex >= current.steps.length || toIndex === fromIndex) {
         return current;
       }
 
       const nextSteps = [...current.steps];
-      const [movedStep] = nextSteps.splice(stepIndex, 1);
-      nextSteps.splice(targetIndex, 0, movedStep);
+      const [movedStep] = nextSteps.splice(fromIndex, 1);
+      nextSteps.splice(toIndex, 0, movedStep);
       return syncEditableReelDraft(current, nextSteps);
     });
+  }
+
+  function handleDraftStepDragStart(event: DragEvent<HTMLElement>, stepIndex: number) {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", String(stepIndex));
+    setDraggedReelStepIndex(stepIndex);
+    setDragOverReelStepIndex(stepIndex);
+  }
+
+  function handleDraftStepDragOver(event: DragEvent<HTMLDivElement>, stepIndex: number) {
+    event.preventDefault();
+    if (draggedReelStepIndex === null) {
+      return;
+    }
+    if (dragOverReelStepIndex !== stepIndex) {
+      setDragOverReelStepIndex(stepIndex);
+    }
+  }
+
+  function handleDraftStepDrop(event: DragEvent<HTMLDivElement>, stepIndex: number) {
+    event.preventDefault();
+    if (draggedReelStepIndex === null) {
+      return;
+    }
+    reorderEditableReelStep(draggedReelStepIndex, stepIndex);
+    setDraggedReelStepIndex(null);
+    setDragOverReelStepIndex(null);
+  }
+
+  function handleDraftStepDragEnd() {
+    setDraggedReelStepIndex(null);
+    setDragOverReelStepIndex(null);
   }
 
   function addEditableReelStep() {
@@ -1046,6 +1302,9 @@ export default function Page() {
               selection_mode: "video_clip",
               clip_start_seconds: 0,
               clip_end_seconds: roundToTenth(defaultDurationSeconds),
+              frame_mode: null,
+              focus_x_percent: null,
+              focus_y_percent: null,
               suggested_duration_seconds: roundToTenth(defaultDurationSeconds),
             },
             mediaItem,
@@ -1054,17 +1313,25 @@ export default function Page() {
         }
 
         return {
-          ...step,
-          media_id: mediaItem.id,
-          original_filename: mediaItem.original_filename,
-          media_kind: mediaItem.media_kind,
-          relative_path: mediaItem.relative_path,
-          source_role: "still_image",
-          selection_mode: "full_frame",
-          clip_start_seconds: null,
-          clip_end_seconds: null,
-          suggested_duration_seconds: roundToTenth(
-            Math.min(maxReelClipDurationSeconds, Math.max(0.5, step.suggested_duration_seconds)),
+          ...normalizeEditableImageStep(
+            {
+              ...step,
+              media_id: mediaItem.id,
+              original_filename: mediaItem.original_filename,
+              media_kind: mediaItem.media_kind,
+              relative_path: mediaItem.relative_path,
+              source_role: "still_image",
+              selection_mode: "full_frame",
+              clip_start_seconds: null,
+              clip_end_seconds: null,
+              frame_mode: step.media_kind === "image" ? step.frame_mode : "contain",
+              focus_x_percent: step.media_kind === "image" ? step.focus_x_percent : 50,
+              focus_y_percent: step.media_kind === "image" ? step.focus_y_percent : 50,
+              suggested_duration_seconds: roundToTenth(
+                Math.min(maxReelClipDurationSeconds, Math.max(0.5, step.suggested_duration_seconds)),
+              ),
+            },
+            maxReelClipDurationSeconds,
           ),
         };
       });
@@ -1095,7 +1362,16 @@ export default function Page() {
 
   function updateEditableReelStepField(
     stepIndex: number,
-    field: "role" | "edit_instruction" | "why" | "suggested_duration_seconds" | "clip_start_seconds" | "clip_end_seconds",
+    field:
+      | "role"
+      | "edit_instruction"
+      | "why"
+      | "suggested_duration_seconds"
+      | "clip_start_seconds"
+      | "clip_end_seconds"
+      | "frame_mode"
+      | "focus_x_percent"
+      | "focus_y_percent",
     value: string
   ) {
     setEditableReelDraft((current) => {
@@ -1108,10 +1384,10 @@ export default function Page() {
           return step;
         }
 
-        if (field === "role" || field === "edit_instruction" || field === "why") {
+        if (field === "role" || field === "edit_instruction" || field === "why" || field === "frame_mode") {
           return {
             ...step,
-            [field]: value,
+            [field]: field === "frame_mode" ? normalizeFrameModeValue(value) : value,
           };
         }
 
@@ -1124,18 +1400,33 @@ export default function Page() {
         }
 
         if (step.media_kind !== "video") {
-          if (field === "suggested_duration_seconds") {
-            return {
-              ...step,
-              suggested_duration_seconds: roundToTenth(
-                clampNumber(parsedValue, 0.5, maxReelClipDurationSeconds),
-              ),
-            };
+          if (field === "focus_x_percent" || field === "focus_y_percent") {
+            return normalizeEditableImageStep(
+              {
+                ...step,
+                [field]: roundToTenth(clampNumber(parsedValue, 0, 100)),
+              },
+              maxReelClipDurationSeconds,
+            );
           }
-          return {
-            ...step,
-            [field]: roundToTenth(Math.max(0, parsedValue)),
-          };
+          if (field === "suggested_duration_seconds") {
+            return normalizeEditableImageStep(
+              {
+                ...step,
+                suggested_duration_seconds: roundToTenth(
+                  clampNumber(parsedValue, 0.5, maxReelClipDurationSeconds),
+                ),
+              },
+              maxReelClipDurationSeconds,
+            );
+          }
+          return normalizeEditableImageStep(
+            {
+              ...step,
+              [field]: roundToTenth(Math.max(0, parsedValue)),
+            },
+            maxReelClipDurationSeconds,
+          );
         }
 
         const nextStep = {
@@ -2685,7 +2976,23 @@ export default function Page() {
                             </div>
                             <div className="meta-card reel-draft-card">
                               <strong>Audio</strong>
-                              <span>{workingReelDraft.audio_strategy}</span>
+                              <select
+                                className="input draft-input"
+                                value={normalizeAudioStrategyValue(workingReelDraft.audio_strategy)}
+                                onChange={(event) =>
+                                  setEditableReelDraft((current) =>
+                                    current
+                                      ? {
+                                          ...current,
+                                          audio_strategy: event.target.value,
+                                        }
+                                      : current,
+                                  )
+                                }
+                              >
+                                <option value="preserve_source_audio">Keep source audio</option>
+                                <option value="mute_all_audio">Mute reel audio</option>
+                              </select>
                             </div>
                             <div className="meta-card reel-draft-card">
                               <strong>Video strategy</strong>
@@ -2768,9 +3075,16 @@ export default function Page() {
                                           maxReelClipDurationSeconds,
                                         )
                                       : null;
+                                  const isDragTarget = dragOverReelStepIndex === stepIndex && draggedReelStepIndex !== null;
+                                  const isDragging = draggedReelStepIndex === stepIndex;
 
                                   return (
-                                  <div className="draft-step-editor" key={`draft-step-${step.step_number}-${step.media_id}`}>
+                                  <div
+                                    className={`draft-step-editor ${isDragTarget ? "drag-target" : ""} ${isDragging ? "dragging" : ""}`}
+                                    key={`draft-step-${step.step_number}-${step.media_id}`}
+                                    onDragOver={(event) => handleDraftStepDragOver(event, stepIndex)}
+                                    onDrop={(event) => handleDraftStepDrop(event, stepIndex)}
+                                  >
                                     <div className="draft-step-header">
                                       <div>
                                         <span className="reel-plan-index">Step {stepIndex + 1}</span>
@@ -2779,6 +3093,15 @@ export default function Page() {
                                         </strong>
                                       </div>
                                       <div className="actions">
+                                        <button
+                                          className="button-secondary button-chip draft-drag-handle"
+                                          draggable
+                                          onDragEnd={handleDraftStepDragEnd}
+                                          onDragStart={(event) => handleDraftStepDragStart(event, stepIndex)}
+                                          type="button"
+                                        >
+                                          Drag
+                                        </button>
                                         <button
                                           className="button-secondary button-chip"
                                           disabled={stepIndex === 0}
@@ -2882,14 +3205,65 @@ export default function Page() {
                                             />
                                           </label>
                                         </>
-                                      ) : null}
+                                      ) : (
+                                        <>
+                                          <label className="draft-field">
+                                            <span>Frame mode</span>
+                                            <select
+                                              className="input draft-input"
+                                              value={normalizeFrameModeValue(step.frame_mode)}
+                                              onChange={(event) =>
+                                                updateEditableReelStepField(stepIndex, "frame_mode", event.target.value)
+                                              }
+                                            >
+                                              <option value="contain">Fit whole image</option>
+                                              <option value="cover">Fill and crop</option>
+                                            </select>
+                                          </label>
+                                          <label className="draft-field draft-field-slider">
+                                            <span>
+                                              Horizontal focus
+                                              <em>{roundToTenth(step.focus_x_percent ?? 50).toFixed(0)}%</em>
+                                            </span>
+                                            <input
+                                              className="draft-slider"
+                                              max="100"
+                                              min="0"
+                                              onChange={(event) =>
+                                                updateEditableReelStepField(stepIndex, "focus_x_percent", event.target.value)
+                                              }
+                                              step="1"
+                                              type="range"
+                                              value={roundToTenth(step.focus_x_percent ?? 50)}
+                                            />
+                                          </label>
+                                          <label className="draft-field draft-field-slider">
+                                            <span>
+                                              Vertical focus
+                                              <em>{roundToTenth(step.focus_y_percent ?? 50).toFixed(0)}%</em>
+                                            </span>
+                                            <input
+                                              className="draft-slider"
+                                              max="100"
+                                              min="0"
+                                              onChange={(event) =>
+                                                updateEditableReelStepField(stepIndex, "focus_y_percent", event.target.value)
+                                              }
+                                              step="1"
+                                              type="range"
+                                              value={roundToTenth(step.focus_y_percent ?? 50)}
+                                            />
+                                          </label>
+                                        </>
+                                      )}
                                     </div>
+                                    <DraftStepPreview mediaItem={stepMediaItem} step={step} />
                                     <div className="draft-step-meta">
                                       <span>
                                         {formatSourceRole(step.source_role)}
                                         {step.selection_mode === "video_clip"
                                           ? ` • ${formatClipWindow(step.clip_start_seconds, step.clip_end_seconds)}`
-                                          : ""}
+                                          : ` • ${formatFrameMode(step.frame_mode)}`}
                                       </span>
                                       <em>{formatDuration(step.suggested_duration_seconds)}</em>
                                     </div>
@@ -2963,7 +3337,7 @@ export default function Page() {
                                           {formatRenderMode(clip.render_mode)}
                                           {clip.media_kind === "video"
                                             ? ` • ${formatClipWindow(clip.clip_start_seconds, clip.clip_end_seconds)}`
-                                            : ""}
+                                            : ` • ${formatFrameMode(clip.frame_mode)}`}
                                         </span>
                                         <span>
                                           output: {clip.output_relative_path}
@@ -3009,7 +3383,8 @@ export default function Page() {
                                 </div>
                                 <p className="render-preview-meta">
                                   {formatBytes(workflowAlbum.rendered_reel.file_size_bytes)} •{" "}
-                                  {formatVideoStrategy(workflowAlbum.rendered_reel.video_strategy)}
+                                  {formatVideoStrategy(workflowAlbum.rendered_reel.video_strategy)} •{" "}
+                                  {formatAudioStrategy(workingReelDraft?.audio_strategy)}
                                 </p>
                               </div>
                             ) : null}

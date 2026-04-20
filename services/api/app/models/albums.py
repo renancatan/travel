@@ -27,6 +27,9 @@ class ReelDraftEditStepInput(BaseModel):
     suggested_duration_seconds: float = Field(gt=0)
     clip_start_seconds: float | None = Field(default=None, ge=0)
     clip_end_seconds: float | None = Field(default=None, ge=0)
+    frame_mode: str | None = Field(default=None, max_length=32)
+    focus_x_percent: float | None = Field(default=None, ge=0, le=100)
+    focus_y_percent: float | None = Field(default=None, ge=0, le=100)
     edit_instruction: str | None = Field(default=None, max_length=300)
     why: str | None = Field(default=None, max_length=500)
 
@@ -35,6 +38,7 @@ class ReelDraftEditInput(BaseModel):
     title: str | None = Field(default=None, max_length=200)
     caption: str | None = Field(default=None, max_length=2200)
     cover_media_id: str | None = Field(default=None, max_length=120)
+    audio_strategy: str | None = Field(default=None, max_length=80)
     steps: list[ReelDraftEditStepInput] = Field(min_length=1, max_length=12)
 
 

@@ -61,6 +61,10 @@ Review and AI analysis:
 - a downloadable reel draft manifest with caption, output settings, steps, selected assets, and a render-ready `ffmpeg` spec
 - a local reel render action that can produce a saved preview/download with preserved source audio on video beats when `ffmpeg` is available
 - a first-pass manual reel editor that can reorder beats, swap assets, edit title/caption/cover, and adjust clip windows or durations before save/render
+- a simple reel-wide audio mode toggle so the user can preserve source audio or mute the reel before rendering
+- draft-step reordering now supports drag-and-drop in addition to move up/down buttons
+- still-image beats now support framing controls so the user can fit the full image or fill/crop the frame and adjust focus before rendering
+- draft-step editing now includes a live per-step preview so image framing and video clip-window changes are visible before re-render
 
 ## What Has Been Built
 
@@ -178,6 +182,9 @@ Implemented in `apps/web`:
 - manual reel editing now clamps video clip windows and durations to the smaller of the real asset duration and the backend-configured max clip cap, so the editor no longer allows values that later fail at render time
 - the new clip-duration clamp has been sanity-checked with a longer video and now behaves cleanly in real use
 - manual reel editing now also supports adding extra beats and removing AI-suggested beats before save/render
+- reel drafts can now switch between preserved source audio and a fully muted output path before render
+- manual reel editing now supports drag-and-drop beat reordering in addition to the move buttons
+- manual reel editing now supports still-image framing controls with fill/crop plus horizontal and vertical focus
 
 ### Operational note
 
@@ -198,14 +205,14 @@ Implemented in `apps/web`:
 - this is still heuristic; it does not yet detect the best scene boundaries or extract clips with `ffmpeg`
 - real local reel rendering is now validated with `ffmpeg` and `ffprobe`
 - rendered output now preserves source audio on video beats and uses silent filler audio elsewhere; richer soundtrack and audio-mixing behavior are still pending
-- there is still no simple user-facing mute/remove-audio toggle for reels yet
+- there is now a simple user-facing mute/remove-audio toggle for reels, but richer soundtrack selection, gain control, and mix rules are still pending
 - render attempts now log clearer API-side messages for request, failure, and success, which will help once real `ffmpeg` debugging starts
 - manual reel editing is still first-pass:
-  - reorder beats
   - swap assets per beat
   - adjust clip windows and durations
   - edit title, caption, and cover
-- the editor now supports add/remove beats, but it still does not support drag-and-drop reordering or multiple saved draft versions
+- the editor now supports add/remove beats, drag-and-drop reordering, audio mode changes, and still-image framing, but it still does not support multiple saved draft versions
+- `Reset edits` currently resets the local editor to the last saved/applied draft, not all the way back to a fresh AI rebuild; `Refresh AI read` is the closer "start from AI again" action today
 - AI still produces a single main reel draft at a time; it does not yet suggest multiple reel variants across different target lengths or creative angles
 - the product direction for later is:
   - let AI suggest multiple reel candidates such as 10s, 20s, and 30s
@@ -226,10 +233,9 @@ Implemented in `apps/web`:
 7. Improve clip-window logic so `multi_clip_sequence` albums split across the best video moments more intelligently.
 8. Improve travel-specific scene tagging beyond generic labels.
 9. Improve the curation scoring so it reflects actual aesthetic quality better.
-10. Add a simple mute/remove-audio toggle for reels, then improve audio handling beyond source-audio preservation with soundtrack selection, gain control, and mix rules.
-11. Continue expanding the reel editor with drag-and-drop reordering and alternate saved versions.
-12. Add a simple mute/remove-audio toggle, then improve soundtrack and audio-mixing controls.
-13. Add AI-generated reel variants across different target lengths and creative angles, then gate deeper editing behind selecting the desired variant(s).
+10. Improve audio handling beyond source-audio preservation with soundtrack selection, gain control, and mix rules.
+11. Continue expanding the reel editor with alternate saved draft versions.
+12. Add AI-generated reel variants across different target lengths and creative angles, then gate deeper editing behind selecting the desired variant(s).
 
 ## Working Rules For Future Changes
 
@@ -258,14 +264,14 @@ Implemented in `apps/web`:
 - validate the reel-draft export with real albums and mixed media
 - validate the new reel `render_spec` output with real albums and mixed media
 - validate rendered reel quality with real albums and mixed media
+- validate the new mute/remove-audio toggle with real albums and mixed media
 - improve reel selection so videos become:
   - one chosen hero clip
   - or a sequence of selected moments across multiple videos
 - validate the new `video_strategy` and clip-window output with real albums that contain 2+ strong videos
 - improve rendered reel quality now that the real backend render step is validated
 - improve source-audio handling with soundtrack support and mixing controls
-- add a simple mute/remove-audio option to the reel workflow
-- continue expanding manual reel editing beyond the current add/remove/reorder controls
+- continue expanding manual reel editing beyond the current add/remove/drag-reorder/image-framing controls
 - add multiple AI reel variants with different target lengths and creative angles
 - show deeper editing controls after the user picks the reel variant(s) they want to keep
 - define the first “post candidate” output contract

@@ -67,6 +67,9 @@ class ReelDraftStepResponse(BaseModel):
     selection_mode: str
     clip_start_seconds: float | None
     clip_end_seconds: float | None
+    frame_mode: str | None = None
+    focus_x_percent: float | None = None
+    focus_y_percent: float | None = None
     relative_path: str
     suggested_duration_seconds: float
     edit_instruction: str
@@ -100,6 +103,9 @@ class ReelRenderClipResponse(BaseModel):
     output_relative_path: str
     clip_start_seconds: float | None
     clip_end_seconds: float | None
+    frame_mode: str | None = None
+    focus_x_percent: float | None = None
+    focus_y_percent: float | None = None
     output_duration_seconds: float
 
 
