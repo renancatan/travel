@@ -172,6 +172,11 @@
   - attach the chosen group icon automatically
   - attach selected images and/or the chosen reel preview to the map stop
   - revisit the legacy map-card behavior and bring back a richer stop preview instead of only a default marker
+  - specifically mirror the old `legacy/travel-v0` interaction model:
+    - custom category icons on the interactive map
+    - clickable markers
+    - expanding place modal/card with images and videos inside it
+    - richer stop exploration directly from the map, not only from a side list
 - [ ] Revisit Step 5 map UX after real usage:
   - verify whether `Use chosen reel` / `Map only` switching feels obvious enough
   - decide whether the chosen reel should auto-enable map mode or stay an explicit button
@@ -183,6 +188,12 @@
   - show richer stop cards with group icon, summary, canonical path, and chosen media preview
   - link to it directly from Step 5
 - [ ] Add filters by country, category, and trip.
+- [ ] Add stronger owner-side stop filters on the map:
+  - country
+  - city
+  - group/category
+  - later personal rating / score
+  - this is for the user's own travel memory browsing, not public reviews
 - [ ] Support manual location correction when metadata is wrong or missing.
 - [ ] Keep the map usable even if the user skips social posting.
 

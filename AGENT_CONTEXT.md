@@ -262,9 +262,20 @@ Implemented in `apps/web`:
   - `storage_path`
 - there is now a first public-style map preview page at `/map`:
   - it fetches saved albums with map entries
+  - shows owner-side filters for country, city, and group
   - shows a stop list in the sidebar
+  - renders a real interactive Leaflet marker map instead of only a raw OSM handoff
+  - clicking a marker now focuses that stop and updates the richer stop explorer
   - renders a richer stop card with icon, summary, canonical path, GPS link, and selected media preview
   - this now carries more of the legacy-map feel than the raw OpenStreetMap pin alone
+  - but the real legacy target interaction is still richer:
+    - custom category icons directly on the interactive map
+    - clicking a place opens an expanded modal/card
+    - that expanded place view shows images and videos inline
+    - this behavior lives in the archived reference files:
+      - [legacy/travel-v0/public/js/map.js](/home/renancatan/renan/projects/travel/legacy/travel-v0/public/js/map.js)
+      - [legacy/travel-v0/public/index.html](/home/renancatan/renan/projects/travel/legacy/travel-v0/public/index.html)
+      - [legacy/travel-v0/public/css/styles.css](/home/renancatan/renan/projects/travel/legacy/travel-v0/public/css/styles.css)
 
 ### Operational note
 
@@ -309,8 +320,8 @@ Implemented in `apps/web`:
   - whether `Save as version` should implicitly apply/save the current active edits
   - whether `Apply draft edits` should remain a separate action or be simplified later
 - the first map draft is intentionally local and album-scoped:
-  - no public map page yet
-  - no clustering or filters yet
+  - there is now a first `/map` page plus owner-side country/city/group filters
+  - no clustering yet
   - no reverse geocoding yet, so country/region/location labels are still simple heuristic suggestions
 - map naming still needs canonicalization work before we trust it as a long-term storage path source:
   - country, state, and city should converge on standard names without us maintaining giant manual lists
@@ -318,12 +329,12 @@ Implemented in `apps/web`:
   - future blob/S3 layout should be able to use normalized place slugs such as:
     - `user/travel/country/state/city/group/trip-slug/...`
 - public map presentation is still minimal:
-  - current OpenStreetMap check is mainly a coordinate sanity check
-  - `/map` is now the first richer stop-preview surface
+  - current OpenStreetMap link is mainly a coordinate sanity check
+  - `/map` is now the first richer stop-preview surface with a real map layer
   - later public map work should still add:
-    - filters
-    - actual marker/canvas behavior
     - image/reel overlays directly on the interactive map layer
+    - legacy-style clickable category icons that open a media-rich place modal/card
+    - the next interaction step should likely move from the current selected-stop spotlight into a fuller modal/card expansion directly on marker click
 - AI now generates first-pass reel variants at different target lengths:
   - `Quick 10s`
   - `Story 15s`
@@ -367,6 +378,12 @@ Implemented in `apps/web`:
 - no live map update flow yet
 - no S3/R2 abstraction wired for production storage yet
 - no auth or multi-user support yet
+- map-side filters are explicitly for the owner's own place-memory browsing:
+  - country
+  - city
+  - group
+  - later personal rating/score
+  - this should not drift toward a public review-platform model
 
 ## Immediate Next Steps
 
@@ -385,6 +402,14 @@ Implemented in `apps/web`:
 13. Keep improving same-length creative variant separation and audience targeting.
 14. Keep refining the compare-first reel flow now that deeper editing is gated behind selecting the desired reel variant.
 15. Revisit whether `Save as version` and `Apply draft edits` should be merged into a simpler action model later.
+16. Replace the current first-pass `/map` stop interaction with the richer legacy pattern:
+   - category-specific icons on the map itself
+   - click marker to open the place
+   - expand images and videos directly from that place interaction
+17. Keep refining the owner-side map browsing flow:
+   - stronger country/city/group filters
+   - later personal score/rating filters for the user's own places
+   - keep the mental model as "my travel memory explorer," not "public place reviews"
 
 ## Working Rules For Future Changes
 
