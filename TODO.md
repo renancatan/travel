@@ -140,6 +140,22 @@
   - edit title, icon, coordinates, country, region, and summary
   - save the draft back onto the album record
 - [x] Add a `GET /map-entries` foundation endpoint for the later public map page.
+- [x] Split map generation into its own AI flow:
+  - separate from album-review AI
+  - supports `Use chosen reel` mode
+  - supports `Map only` mode
+  - accepts a direct user prompt such as `petar caves`
+  - saves richer location hierarchy:
+    - country
+    - state
+    - city
+    - region
+    - group
+    - icon
+- [ ] Revisit Step 5 map UX after real usage:
+  - verify whether `Use chosen reel` / `Map only` switching feels obvious enough
+  - decide whether the chosen reel should auto-enable map mode or stay an explicit button
+  - keep the map prompt lightweight without making the step feel hidden
 - [ ] Build a shareable public map page.
 - [ ] Add filters by country, category, and trip.
 - [ ] Support manual location correction when metadata is wrong or missing.

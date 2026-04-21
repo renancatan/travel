@@ -10,7 +10,7 @@ from fastapi.responses import FileResponse
 
 from services.api.app.core.album_suggestions import AlbumSuggestionService
 from services.api.app.core.file_repository import FileRepository
-from services.api.app.core.map_entries import build_auto_map_entry, merge_map_entry
+from services.api.app.core.map_entries import MapEntrySuggestionService, build_auto_map_entry, merge_map_entry
 from services.api.app.core.media_metadata import build_media_metadata, enrich_saved_media_metadata
 from services.api.app.core.reel_renderer import ReelRenderError, ReelRenderer
 from services.api.app.models.albums import (
@@ -19,6 +19,7 @@ from services.api.app.models.albums import (
     UploadAnalysisFramesRequest,
     CreateAlbumRequest,
     GenerateAlbumDescriptionResponse,
+    GenerateMapEntryRequest,
     UpdateMapEntryRequest,
     RenderReelResponse,
     SaveReelDraftVersionRequest,
@@ -31,6 +32,7 @@ from services.api.app.models.suggestions import AlbumSuggestionResponse, Generat
 router = APIRouter(prefix="/albums", tags=["albums"])
 repository = FileRepository()
 suggestion_service = AlbumSuggestionService()
+map_entry_service = MapEntrySuggestionService()
 reel_renderer = ReelRenderer()
 logger = logging.getLogger(__name__)
 
@@ -78,6 +80,33 @@ def generate_album_map_entry(album_id: str) -> dict:
 
     try:
         map_entry = build_auto_map_entry(album, album.get("map_entry"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    updated_album = repository.save_map_entry(album_id, map_entry)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
+
+
+@router.post("/{album_id}/map-entry/ai", response_model=AlbumResponse)
+def generate_album_map_entry_with_ai(album_id: str, request: GenerateMapEntryRequest) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    try:
+        map_entry = map_entry_service.generate(
+            album,
+            user_prompt=request.user_prompt,
+            generation_mode=request.generation_mode,
+            selected_media_ids=request.selected_media_ids,
+            selected_reel_draft_name=request.selected_reel_draft_name,
+            selected_reel_title=request.selected_reel_title,
+            selected_reel_caption=request.selected_reel_caption,
+            selected_reel_video_strategy=request.selected_reel_video_strategy,
+            existing_entry=album.get("map_entry"),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.api.app.core.llm_router import MultiProviderRouter
+from services.api.app.core.map_ai_settings import get_map_ai_settings
 from services.api.app.core.media_metadata import get_media_tooling_status
 from services.api.app.core.reel_variant_presets import get_reel_variant_runtime_presets
 from services.api.app.core.settings import get_settings
@@ -14,6 +15,7 @@ from services.api.app.routers.albums import router as albums_router
 from services.api.app.routers.map_entries import router as map_entries_router
 
 settings = get_settings()
+map_ai_settings = get_map_ai_settings()
 app = FastAPI(title=settings.app_name)
 app.add_middleware(
     CORSMiddleware,
@@ -45,6 +47,7 @@ def runtime() -> dict[str, object]:
     return {
         "app_name": settings.app_name,
         "default_model_alias": settings.copilot_default_model_alias,
+        "map_ai_model_alias": map_ai_settings.model_alias,
         "storage_backend": settings.storage_backend,
         "queue_backend": settings.queue_backend,
         "local_storage_root": settings.local_storage_root,

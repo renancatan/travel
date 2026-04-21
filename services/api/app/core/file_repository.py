@@ -473,10 +473,11 @@ class FileRepository:
             return None
 
         title = str(map_entry.get("title") or "").strip()
+        group_key = str(map_entry.get("group_key") or "").strip()
         icon_key = str(map_entry.get("icon_key") or "").strip()
         album_id = str(map_entry.get("album_id") or "").strip()
         album_name = str(map_entry.get("album_name") or "").strip()
-        if not title or not icon_key or not album_id or not album_name:
+        if not title or not group_key or not icon_key or not album_id or not album_name:
             return None
 
         selected_media_ids = [
@@ -492,11 +493,16 @@ class FileRepository:
             "latitude": float(latitude),
             "longitude": float(longitude),
             "country": str(map_entry.get("country") or "").strip() or None,
+            "state": str(map_entry.get("state") or "").strip() or None,
+            "city": str(map_entry.get("city") or "").strip() or None,
             "region": str(map_entry.get("region") or "").strip() or None,
             "location_label": str(map_entry.get("location_label") or "").strip() or None,
+            "group_key": group_key,
             "icon_key": icon_key,
             "summary": str(map_entry.get("summary") or "").strip() or None,
             "selected_media_ids": selected_media_ids,
+            "selected_reel_draft_name": str(map_entry.get("selected_reel_draft_name") or "").strip() or None,
+            "generation_prompt": str(map_entry.get("generation_prompt") or "").strip() or None,
             "gps_point_count": int(map_entry.get("gps_point_count") or 0),
             "source": str(map_entry.get("source") or "album_auto").strip() or "album_auto",
             "created_at": map_entry.get("created_at", _utc_now()),

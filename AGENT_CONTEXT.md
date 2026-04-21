@@ -74,8 +74,12 @@ Review and AI analysis:
 
 Map draft:
 
-- generate one saved map draft from album GPS plus the current AI read
-- edit title, icon, coordinates, country, region, location label, and summary
+- separate map AI call, distinct from the album-review AI
+- default flow is: choose the right reel first, then use that chosen reel as the main map context
+- optional `Map only` mode exists when the user wants to build the map stop without tying it to a chosen reel yet
+- map AI accepts a direct user prompt such as `petar caves`
+- prompt should outweigh weak GPS when it clearly implies the place
+- edit title, group, icon, coordinates, country, state, city, region, location label, and summary
 - save the map draft back onto the album
 - open the current draft in OpenStreetMap for a quick location sanity check
 
@@ -107,6 +111,7 @@ Implemented in `services/api`:
 - `POST /albums/{album_id}/suggestions`
 - `POST /albums/{album_id}/reel-draft`
 - `POST /albums/{album_id}/map-entry/auto`
+- `POST /albums/{album_id}/map-entry/ai`
 - `PATCH /albums/{album_id}/map-entry`
 - `GET /map-entries`
 
@@ -116,6 +121,8 @@ Current backend capabilities:
 - local media storage
 - image metadata extraction including JPEG EXIF timestamp, device, and GPS when present
 - first-pass map draft persistence attached directly to each album record
+- separate map-AI generation that can resolve place hierarchy and map grouping from prompt + reel + album context
+- the dedicated map AI now defaults to the Azure/OpenAI `gpt4o` route instead of Gemini
 - ISO-based video parsing for common `mp4` / `mov` style uploads without external tooling
 - browser-side video frame sampling so uploaded clips can provide real visual samples to the AI review flow
 - optional `ffprobe` enrichment and optional `ffmpeg` thumbnail generation when those binaries are available
@@ -155,8 +162,9 @@ Implemented in `apps/web`:
 - reel draft export UI now shows the render backend, working directory, output paths, render notes, render clips, and copyable shell commands
 - the UI now includes `Render reel`, an inline rendered preview, and `Download rendered reel` when a finished render exists
 - a new Step 5 map draft panel can now:
-  - auto-build a location draft from GPS media
-  - show/edit icon, title, coords, place labels, and summary
+  - switch between `Use chosen reel` and `Map only`
+  - send a dedicated prompt into a separate map-AI call
+  - show/edit group, icon, coords, country, state, city, region, location label, and summary
   - save that draft back to the album
   - open the current draft in OpenStreetMap
 - the `Render reel` button is now disabled when `ffmpeg` is unavailable, so the app no longer fires avoidable `409` render requests on machines without local media tooling
@@ -186,6 +194,7 @@ Implemented in `apps/web`:
 - local reel rendering now works end to end on this machine with installed `ffmpeg`
 - local reel rendering now exports a final `.mp4` with both H.264 video and AAC audio when the draft includes video beats
 - map draft generation and save now work against real album GPS metadata
+- map draft generation is now its own AI flow and no longer depends only on GPS media
 
 ### Recently fixed
 
@@ -230,6 +239,11 @@ Implemented in `apps/web`:
   - only then unlock detailed editing and final export actions
 - saving draft edits or saving a version no longer kicks the user back into the locked compare state for the same album
 - the chosen reel workspace now stays visually tied to the same draft the user is editing below, so render/filter/export actions no longer feel split across two separate reel previews
+- Step 5 map drafting is now a dedicated AI step:
+  - prompt-driven
+  - chosen-reel-aware
+  - map-only capable
+  - with state/city/group support in the saved schema
 
 ### Operational note
 
@@ -238,6 +252,11 @@ Implemented in `apps/web`:
 - `GET /runtime` now reports media tooling availability so it is easy to see whether `ffmpeg` / `ffprobe` are installed locally
 - `GET /runtime` now also exposes reel-variant preset metadata so the frontend duration selector can stay in sync with the backend presets
 - map-entry drafts are stored in each album `album.json` for now, and `GET /map-entries` is the first public-map foundation endpoint
+- the new map AI is intentionally separate from the album-review AI so map resolution can evolve independently of caption/reel analysis
+- the dedicated map AI model is now controlled from one place:
+  - [map_ai_settings.py](/home/renancatan/renan/projects/travel/services/api/app/core/map_ai_settings.py)
+  - default alias: `gpt4o`
+  - optional env override: `TRAVEL_MAP_AI_MODEL_ALIAS`
 
 ## Known Gaps
 

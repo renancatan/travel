@@ -53,24 +53,34 @@ type MapEntry = {
   latitude: number;
   longitude: number;
   country: string | null;
+  state: string | null;
+  city: string | null;
   region: string | null;
   location_label: string | null;
+  group_key: string;
   icon_key: string;
   summary: string | null;
   selected_media_ids: string[];
+  selected_reel_draft_name: string | null;
+  generation_prompt: string | null;
   gps_point_count: number;
   source: string;
   created_at: string;
   updated_at: string;
 };
 
+type MapGenerationMode = "chosen_reel" | "map_only";
+
 type MapDraftForm = {
   title: string;
   latitude: string;
   longitude: string;
   country: string;
+  state: string;
+  city: string;
   region: string;
   location_label: string;
+  group_key: string;
   icon_key: string;
   summary: string;
 };
@@ -321,6 +331,14 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8
 const NEW_ALBUM_DRAFT_KEY = "travel-project:new-album-draft";
 const DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS = 30;
 const DEFAULT_MAX_REEL_TARGET_DURATION_SECONDS = 60;
+const MAP_GROUP_OPTIONS = [
+  { value: "caves", label: "Caves" },
+  { value: "beaches", label: "Beaches" },
+  { value: "bars", label: "Bars / Pubs" },
+  { value: "boat", label: "Boat / Water" },
+  { value: "falls", label: "Falls / Waterfall" },
+  { value: "general", label: "General" },
+] as const;
 const MAP_ICON_OPTIONS = [
   { value: "general", label: "General" },
   { value: "caves", label: "Cave" },
@@ -669,11 +687,42 @@ function buildMapDraftForm(mapEntry: MapEntry | null | undefined): MapDraftForm 
     latitude: mapEntry.latitude.toFixed(6),
     longitude: mapEntry.longitude.toFixed(6),
     country: mapEntry.country ?? "",
+    state: mapEntry.state ?? "",
+    city: mapEntry.city ?? "",
     region: mapEntry.region ?? "",
     location_label: mapEntry.location_label ?? "",
+    group_key: mapEntry.group_key,
     icon_key: mapEntry.icon_key,
     summary: mapEntry.summary ?? "",
   };
+}
+
+function inferMapGenerationMode(mapEntry: MapEntry | null | undefined): MapGenerationMode | null {
+  if (!mapEntry) {
+    return null;
+  }
+  return mapEntry.selected_reel_draft_name ? "chosen_reel" : "map_only";
+}
+
+function getDefaultMapIconForGroup(groupKey: string): string {
+  return MAP_ICON_OPTIONS.some((option) => option.value === groupKey) ? groupKey : "general";
+}
+
+function extractReelDraftSelectedMediaIds(reelDraft: ReelDraft | null): string[] {
+  if (!reelDraft) {
+    return [];
+  }
+
+  const seenMediaIds = new Set<string>();
+  const selectedMediaIds: string[] = [];
+  for (const step of reelDraft.steps) {
+    if (!step.media_id || seenMediaIds.has(step.media_id)) {
+      continue;
+    }
+    seenMediaIds.add(step.media_id);
+    selectedMediaIds.push(step.media_id);
+  }
+  return selectedMediaIds;
 }
 
 function parseCoordinateValue(value: string): number | null {
@@ -1093,6 +1142,8 @@ export default function Page() {
   const [isRenderingVariantSet, setIsRenderingVariantSet] = useState(false);
   const [isGeneratingMapEntry, setIsGeneratingMapEntry] = useState(false);
   const [isSavingMapEntry, setIsSavingMapEntry] = useState(false);
+  const [mapGenerationMode, setMapGenerationMode] = useState<MapGenerationMode | null>(null);
+  const [mapPrompt, setMapPrompt] = useState("");
   const [editableMapDraft, setEditableMapDraft] = useState<MapDraftForm | null>(null);
   const [maxReelClipDurationSeconds, setMaxReelClipDurationSeconds] = useState(
     DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS,
@@ -1146,6 +1197,12 @@ export default function Page() {
       ? albums.find((album) => normalizeAlbumName(album.name) === normalizeAlbumName(name))
       : null;
   const gpsMediaItems = getGpsMediaItems(workflowAlbum);
+  const chosenReelMediaIds = extractReelDraftSelectedMediaIds(workingReelDraft);
+  const chosenReelMediaLabels = chosenReelMediaIds
+    .map((mediaId) => workflowAlbum?.media_items.find((item) => item.id === mediaId)?.original_filename ?? null)
+    .filter((value): value is string => Boolean(value));
+  const hasChosenReelMapSource = Boolean(selectedEditorVariantId && workingReelDraft && chosenReelMediaIds.length > 0);
+  const canUseChosenReelMapMode = hasChosenReelMapSource || mapGenerationMode === "chosen_reel";
   const selectedMapMediaIds = workflowAlbum?.map_entry?.selected_media_ids ?? [];
   const selectedMapMediaLabels = selectedMapMediaIds
     .map((mediaId) => workflowAlbum?.media_items.find((item) => item.id === mediaId)?.original_filename ?? null)
@@ -1854,19 +1911,25 @@ export default function Page() {
     setEditableReelDraft(null);
     setSelectedEditorVariantId(null);
     setEditableMapDraft(buildMapDraftForm(workflowAlbum?.map_entry));
+    setMapGenerationMode(inferMapGenerationMode(workflowAlbum?.map_entry));
+    setMapPrompt(workflowAlbum?.map_entry?.generation_prompt ?? "");
+  }, [workflowAlbum?.id]);
+
+  useEffect(() => {
     if (!workflowAlbum) {
       setMapEntryStatus({
         tone: "idle",
-        message: "Choose an album first. The map draft appears after media review.",
+        message: "Choose an album first. The separate map AI step will unlock after that.",
       });
       return;
     }
 
-    const workflowGpsMediaItems = getGpsMediaItems(workflowAlbum);
-    if (workflowGpsMediaItems.length === 0) {
+    if (!mapGenerationMode) {
       setMapEntryStatus({
         tone: "idle",
-        message: "This album has no GPS-tagged media yet, so the map draft is still locked.",
+        message: hasChosenReelMapSource
+          ? "Chosen reel is ready. Use it for the map draft below, or switch to map-only mode."
+          : "Choose one reel above first, or switch to map-only mode to generate the map draft.",
       });
       return;
     }
@@ -1874,16 +1937,24 @@ export default function Page() {
     if (workflowAlbum.map_entry) {
       setMapEntryStatus({
         tone: "ok",
-        message: "Map draft loaded for this album. You can refine it below or rebuild it from the current media.",
+        message:
+          mapGenerationMode === "chosen_reel"
+            ? hasChosenReelMapSource
+              ? "Map draft loaded from the chosen reel context. You can refine it below or rebuild it with a new prompt."
+              : "Map draft loaded from chosen reel context. You can edit it below now, and re-select a reel above if you want to rebuild it."
+            : "Map draft loaded in map-only mode. You can refine it below or rebuild it with a new prompt.",
       });
       return;
     }
 
     setMapEntryStatus({
       tone: "idle",
-      message: "GPS media is available. Generate the first map draft below.",
+      message:
+        mapGenerationMode === "chosen_reel"
+          ? "Chosen reel context is ready. Add an optional prompt and generate the first map draft."
+          : "Map-only mode is ready. Add a location prompt like 'petar caves' and generate the first map draft.",
     });
-  }, [workflowAlbum?.id]);
+  }, [workflowAlbum, mapGenerationMode, hasChosenReelMapSource]);
 
   useEffect(() => {
     if (albumMode !== "existing" || !workflowAlbum || activeSuggestions || isAnalyzing) {
@@ -2763,7 +2834,21 @@ export default function Page() {
     field: keyof MapDraftForm,
     value: string,
   ) {
-    setEditableMapDraft((current) => (current ? { ...current, [field]: value } : current));
+    setEditableMapDraft((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (field === "group_key") {
+        return {
+          ...current,
+          group_key: value,
+          icon_key: getDefaultMapIconForGroup(value),
+        };
+      }
+
+      return { ...current, [field]: value };
+    });
   }
 
   async function handleGenerateMapDraft() {
@@ -2775,32 +2860,69 @@ export default function Page() {
       return;
     }
 
+    if (!mapGenerationMode) {
+      setMapEntryStatus({
+        tone: "error",
+        message: "Choose whether the map should use the chosen reel or a map-only prompt first.",
+      });
+      return;
+    }
+
+    if (mapGenerationMode === "chosen_reel" && !workingReelDraft) {
+      setMapEntryStatus({
+        tone: "error",
+        message: "Choose one reel above first. The map AI uses that selected reel as its primary context.",
+      });
+      return;
+    }
+
     setIsGeneratingMapEntry(true);
     setMapEntryStatus({
       tone: "idle",
-      message: "Building a map draft from the album GPS, labels, and AI summary...",
+      message:
+        mapGenerationMode === "chosen_reel"
+          ? "Building the map draft from the chosen reel, your prompt, and the album context..."
+          : "Building the map draft from your prompt plus the album context...",
     });
 
     try {
-      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/map-entry/auto`, {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/map-entry/ai`, {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          user_prompt: mapPrompt.trim() || null,
+          generation_mode: mapGenerationMode,
+          selected_media_ids: mapGenerationMode === "chosen_reel" ? chosenReelMediaIds : undefined,
+          selected_reel_draft_name: mapGenerationMode === "chosen_reel" ? workingReelDraft?.draft_name ?? null : null,
+          selected_reel_title: mapGenerationMode === "chosen_reel" ? workingReelDraft?.title ?? null : null,
+          selected_reel_caption: mapGenerationMode === "chosen_reel" ? workingReelDraft?.caption ?? null : null,
+          selected_reel_video_strategy:
+            mapGenerationMode === "chosen_reel" ? workingReelDraft?.video_strategy ?? null : null,
+        }),
       });
       if (!response.ok) {
         const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
-        throw new Error(detail?.detail ?? `Could not build map draft (${response.status})`);
+        throw new Error(detail?.detail ?? `Could not build AI map draft (${response.status})`);
       }
 
       const updatedAlbum = (await response.json()) as Album;
       syncAlbumStateFromApi(updatedAlbum);
       setEditableMapDraft(buildMapDraftForm(updatedAlbum.map_entry));
+      setMapGenerationMode(inferMapGenerationMode(updatedAlbum.map_entry));
+      setMapPrompt(updatedAlbum.map_entry?.generation_prompt ?? mapPrompt);
       setMapEntryStatus({
         tone: "ok",
-        message: "Map draft generated from the current album.",
+        message:
+          mapGenerationMode === "chosen_reel"
+            ? "Map draft generated from the chosen reel and saved to this album."
+            : "Map draft generated in map-only mode and saved to this album.",
       });
     } catch (error) {
       setMapEntryStatus({
         tone: "error",
-        message: error instanceof Error ? error.message : "Could not build the map draft.",
+        message: error instanceof Error ? error.message : "Could not build the AI map draft.",
       });
     } finally {
       setIsGeneratingMapEntry(false);
@@ -2857,8 +2979,11 @@ export default function Page() {
           latitude,
           longitude,
           country: editableMapDraft.country.trim() || null,
+          state: editableMapDraft.state.trim() || null,
+          city: editableMapDraft.city.trim() || null,
           region: editableMapDraft.region.trim() || null,
           location_label: editableMapDraft.location_label.trim() || null,
+          group_key: editableMapDraft.group_key,
           icon_key: editableMapDraft.icon_key,
           summary: editableMapDraft.summary.trim() || null,
         }),
@@ -4550,16 +4675,42 @@ export default function Page() {
                     <p className="eyebrow">Step 5</p>
                     <h2>Map draft</h2>
                   </div>
-                  <div className="review-meta">{gpsMediaItems.length} GPS item(s) detected</div>
+                  <div className="review-meta">
+                    {mapGenerationMode === "chosen_reel"
+                      ? "chosen reel mode"
+                      : mapGenerationMode === "map_only"
+                        ? "map-only mode"
+                        : "separate AI call"}
+                  </div>
                 </div>
 
                 <div className="form-grid">
                   <div className="context-note">
-                    <strong>Album to map</strong>
+                    <strong>Separate map AI</strong>
                     <p>
-                      This first pass turns album GPS points plus the current AI read into one saved location draft.
-                      Later, this becomes the source for the public travel map.
+                      Generate the map in its own AI pass. A prompt like <code>petar caves</code> should help the app
+                      resolve country, state, city, group, icon, and marker summary with the prompt first, then the
+                      album and chosen reel context, and finally GPS as fallback.
                     </p>
+                  </div>
+
+                  <div className="actions">
+                    <button
+                      className={mapGenerationMode === "chosen_reel" ? "button-primary" : "button-secondary"}
+                      disabled={!canUseChosenReelMapMode || isGeneratingMapEntry}
+                      onClick={() => setMapGenerationMode("chosen_reel")}
+                      type="button"
+                    >
+                      Use chosen reel
+                    </button>
+                    <button
+                      className={mapGenerationMode === "map_only" ? "button-primary" : "button-secondary"}
+                      disabled={isGeneratingMapEntry}
+                      onClick={() => setMapGenerationMode("map_only")}
+                      type="button"
+                    >
+                      Map only
+                    </button>
                   </div>
 
                   <div
@@ -4570,162 +4721,268 @@ export default function Page() {
                     {mapEntryStatus.message}
                   </div>
 
-                  <div className="actions">
-                    <button
-                      className="button-primary"
-                      disabled={isGeneratingMapEntry || gpsMediaItems.length === 0}
-                      onClick={() => void handleGenerateMapDraft()}
-                      type="button"
-                    >
-                      {isGeneratingMapEntry
-                        ? "Building map draft..."
-                        : workflowAlbum.map_entry
-                          ? "Refresh map draft from album"
-                          : "Generate map draft from album"}
-                    </button>
-                    <button
-                      className="button-secondary"
-                      disabled={!editableMapDraft || isSavingMapEntry}
-                      onClick={() => void handleSaveMapDraft()}
-                      type="button"
-                    >
-                      {isSavingMapEntry ? "Saving..." : "Save map draft"}
-                    </button>
-                    {getOpenStreetMapUrl(editableMapDraft) ? (
-                      <a
-                        className="button-secondary"
-                        href={getOpenStreetMapUrl(editableMapDraft) ?? undefined}
-                        rel="noreferrer"
-                        target="_blank"
-                      >
-                        Open in OpenStreetMap
-                      </a>
-                    ) : null}
-                  </div>
-
-                  {editableMapDraft ? (
+                  {mapGenerationMode ? (
                     <>
-                      <div className="reel-draft-grid">
-                        <label className="field">
-                          <span className="label-row">
-                            <strong>Map title</strong>
-                            <span className="hint">Required</span>
-                          </span>
-                          <input
-                            className="input"
-                            onChange={(event) => handleMapDraftFieldChange("title", event.target.value)}
-                            value={editableMapDraft.title}
-                          />
-                        </label>
-                        <label className="field">
-                          <span className="label-row">
-                            <strong>Icon</strong>
-                            <span className="hint">First-pass marker type</span>
-                          </span>
-                          <select
-                            className="input"
-                            onChange={(event) => handleMapDraftFieldChange("icon_key", event.target.value)}
-                            value={editableMapDraft.icon_key}
-                          >
-                            {MAP_ICON_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        </label>
-                        <label className="field">
-                          <span className="label-row">
-                            <strong>Latitude</strong>
-                            <span className="hint">Editable</span>
-                          </span>
-                          <input
-                            className="input"
-                            inputMode="decimal"
-                            onChange={(event) => handleMapDraftFieldChange("latitude", event.target.value)}
-                            value={editableMapDraft.latitude}
-                          />
-                        </label>
-                        <label className="field">
-                          <span className="label-row">
-                            <strong>Longitude</strong>
-                            <span className="hint">Editable</span>
-                          </span>
-                          <input
-                            className="input"
-                            inputMode="decimal"
-                            onChange={(event) => handleMapDraftFieldChange("longitude", event.target.value)}
-                            value={editableMapDraft.longitude}
-                          />
-                        </label>
-                        <label className="field">
-                          <span className="label-row">
-                            <strong>Country</strong>
-                            <span className="hint">Optional</span>
-                          </span>
-                          <input
-                            className="input"
-                            onChange={(event) => handleMapDraftFieldChange("country", event.target.value)}
-                            value={editableMapDraft.country}
-                          />
-                        </label>
-                        <label className="field">
-                          <span className="label-row">
-                            <strong>Region</strong>
-                            <span className="hint">Optional</span>
-                          </span>
-                          <input
-                            className="input"
-                            onChange={(event) => handleMapDraftFieldChange("region", event.target.value)}
-                            value={editableMapDraft.region}
-                          />
-                        </label>
-                        <label className="field">
-                          <span className="label-row">
-                            <strong>Location label</strong>
-                            <span className="hint">Optional</span>
-                          </span>
-                          <input
-                            className="input"
-                            onChange={(event) => handleMapDraftFieldChange("location_label", event.target.value)}
-                            value={editableMapDraft.location_label}
-                          />
-                        </label>
-                        <div className="selected-album-card">
-                          <strong>GPS coverage</strong>
-                          <span>
-                            {workflowAlbum.map_entry?.gps_point_count ?? gpsMediaItems.length} point(s) contribute to this draft.
-                          </span>
-                          {selectedMapMediaLabels.length > 0 ? (
-                            <div className="tag-row">
-                              {selectedMapMediaLabels.map((label) => (
-                                <span className="tag" key={`map-media-${label}`}>
-                                  {label}
-                                </span>
-                              ))}
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-
                       <label className="field">
                         <span className="label-row">
-                          <strong>Map summary</strong>
-                          <span className="hint">Optional note for the future public map</span>
+                          <strong>Map prompt</strong>
+                          <span className="hint">Optional but recommended</span>
                         </span>
                         <textarea
                           className="textarea"
-                          onChange={(event) => handleMapDraftFieldChange("summary", event.target.value)}
-                          placeholder="Quick context for why this stop matters on the travel map."
-                          value={editableMapDraft.summary}
+                          onChange={(event) => setMapPrompt(event.target.value)}
+                          placeholder={
+                            mapGenerationMode === "chosen_reel"
+                              ? "Example: petar caves, cave entrance in iporanga, brazil"
+                              : "Example: petar caves"
+                          }
+                          value={mapPrompt}
                         />
                       </label>
+
+                      <div className="selected-album-card">
+                        <strong>{mapGenerationMode === "chosen_reel" ? "Chosen reel source" : "Map-only source"}</strong>
+                        {mapGenerationMode === "chosen_reel" ? (
+                          <>
+                            <span>
+                              {workingReelDraft
+                                ? `${workingReelDraft.draft_name} will guide the map AI.`
+                                : "This saved draft came from a chosen reel earlier. Re-select a reel above to rebuild it."}
+                            </span>
+                            {chosenReelMediaLabels.length > 0 ? (
+                              <div className="tag-row">
+                                {chosenReelMediaLabels.map((label) => (
+                                  <span className="tag" key={`chosen-map-media-${label}`}>
+                                    {label}
+                                  </span>
+                                ))}
+                              </div>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            <span>
+                              Use the album description, filenames, and your prompt to create the map stop even when GPS
+                              is missing or weak.
+                            </span>
+                            <div className="tag-row">
+                              <span className="tag">{gpsMediaItems.length} GPS item(s)</span>
+                              {workflowAlbum.map_entry?.generation_prompt ? <span className="tag">last prompt saved</span> : null}
+                            </div>
+                          </>
+                        )}
+                      </div>
+
+                      <div className="actions">
+                        <button
+                          className="button-primary"
+                          disabled={
+                            isGeneratingMapEntry || (mapGenerationMode === "chosen_reel" && !hasChosenReelMapSource)
+                          }
+                          onClick={() => void handleGenerateMapDraft()}
+                          type="button"
+                        >
+                          {isGeneratingMapEntry
+                            ? "Generating map draft..."
+                            : workflowAlbum.map_entry
+                              ? "Rebuild map with AI"
+                              : "Generate map with AI"}
+                        </button>
+                        <button
+                          className="button-secondary"
+                          disabled={!editableMapDraft || isSavingMapEntry}
+                          onClick={() => void handleSaveMapDraft()}
+                          type="button"
+                        >
+                          {isSavingMapEntry ? "Saving..." : "Save map draft"}
+                        </button>
+                        {getOpenStreetMapUrl(editableMapDraft) ? (
+                          <a
+                            className="button-secondary"
+                            href={getOpenStreetMapUrl(editableMapDraft) ?? undefined}
+                            rel="noreferrer"
+                            target="_blank"
+                          >
+                            Open in OpenStreetMap
+                          </a>
+                        ) : null}
+                      </div>
+
+                      {editableMapDraft ? (
+                        <>
+                          <div className="reel-draft-grid">
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Map title</strong>
+                                <span className="hint">Required</span>
+                              </span>
+                              <input
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("title", event.target.value)}
+                                value={editableMapDraft.title}
+                              />
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Group</strong>
+                                <span className="hint">Icon auto-follows group</span>
+                              </span>
+                              <select
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("group_key", event.target.value)}
+                                value={editableMapDraft.group_key}
+                              >
+                                {MAP_GROUP_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Icon</strong>
+                                <span className="hint">Adjust manually if needed</span>
+                              </span>
+                              <select
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("icon_key", event.target.value)}
+                                value={editableMapDraft.icon_key}
+                              >
+                                {MAP_ICON_OPTIONS.map((option) => (
+                                  <option key={option.value} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Latitude</strong>
+                                <span className="hint">Editable</span>
+                              </span>
+                              <input
+                                className="input"
+                                inputMode="decimal"
+                                onChange={(event) => handleMapDraftFieldChange("latitude", event.target.value)}
+                                value={editableMapDraft.latitude}
+                              />
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Longitude</strong>
+                                <span className="hint">Editable</span>
+                              </span>
+                              <input
+                                className="input"
+                                inputMode="decimal"
+                                onChange={(event) => handleMapDraftFieldChange("longitude", event.target.value)}
+                                value={editableMapDraft.longitude}
+                              />
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Country</strong>
+                                <span className="hint">Optional</span>
+                              </span>
+                              <input
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("country", event.target.value)}
+                                value={editableMapDraft.country}
+                              />
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>State</strong>
+                                <span className="hint">Optional</span>
+                              </span>
+                              <input
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("state", event.target.value)}
+                                value={editableMapDraft.state}
+                              />
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>City</strong>
+                                <span className="hint">Optional</span>
+                              </span>
+                              <input
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("city", event.target.value)}
+                                value={editableMapDraft.city}
+                              />
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Region</strong>
+                                <span className="hint">Optional</span>
+                              </span>
+                              <input
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("region", event.target.value)}
+                                value={editableMapDraft.region}
+                              />
+                            </label>
+                            <label className="field">
+                              <span className="label-row">
+                                <strong>Location label</strong>
+                                <span className="hint">Optional</span>
+                              </span>
+                              <input
+                                className="input"
+                                onChange={(event) => handleMapDraftFieldChange("location_label", event.target.value)}
+                                value={editableMapDraft.location_label}
+                              />
+                            </label>
+                            <div className="selected-album-card">
+                              <strong>Map inputs</strong>
+                              <span>
+                                {workflowAlbum.map_entry?.selected_reel_draft_name
+                                  ? `Linked reel: ${workflowAlbum.map_entry.selected_reel_draft_name}`
+                                  : "No reel link saved for this draft."}
+                              </span>
+                              <span>{workflowAlbum.map_entry?.gps_point_count ?? gpsMediaItems.length} GPS point(s) available.</span>
+                              {selectedMapMediaLabels.length > 0 ? (
+                                <div className="tag-row">
+                                  {selectedMapMediaLabels.map((label) => (
+                                    <span className="tag" key={`map-media-${label}`}>
+                                      {label}
+                                    </span>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </div>
+                          </div>
+
+                          <label className="field">
+                            <span className="label-row">
+                              <strong>Map summary</strong>
+                              <span className="hint">Optional note for the future public map</span>
+                            </span>
+                            <textarea
+                              className="textarea"
+                              onChange={(event) => handleMapDraftFieldChange("summary", event.target.value)}
+                              placeholder="Quick context for why this stop matters on the travel map."
+                              value={editableMapDraft.summary}
+                            />
+                          </label>
+                        </>
+                      ) : (
+                        <div className="selected-album-card">
+                          <strong>No saved map draft yet</strong>
+                          <span>
+                            Generate the first draft with the separate map AI, then refine the saved location fields here.
+                          </span>
+                        </div>
+                      )}
                     </>
                   ) : (
                     <div className="selected-album-card">
-                      <strong>No saved map draft yet</strong>
+                      <strong>Map step locked until you choose a source</strong>
                       <span>
-                        Generate the first draft from album GPS and the AI summary, then fine-tune it here before the later map page exists.
+                        Pick one rendered reel above for map-linked generation, or switch to map-only mode if you want to
+                        build the location without tying it to a selected reel yet.
                       </span>
                     </div>
                   )}
