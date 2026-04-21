@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from services.api.app.core.map_ai_settings import get_map_ai_settings
+from services.api.app.core.map_place_normalizer import normalize_map_place_fields
 from services.api.app.core.llm_router import MultiProviderRouter
 
 
@@ -245,6 +246,8 @@ class MapEntrySuggestionService:
             "title, country, state, city, region, location_label, group_key, summary, selected_media_ids.\n"
             "Rules:\n"
             "- group_key must be one of: caves, beaches, bars, boat, falls, general.\n"
+            "- Return country, state, and city using stable common names, not abbreviations.\n"
+            "- Example: use Brazil instead of Brasil, Sao Paulo or São Paulo instead of SP.\n"
             "- Prefer the provided selected_media_ids when generation_mode is chosen_reel.\n"
             "- Keep title concise and map-friendly.\n"
             "- Keep summary to 1-2 sentences.\n"
@@ -272,20 +275,36 @@ class MapEntrySuggestionService:
         ]
 
         group_key = normalize_group_key(data.get("group_key") or fallback_entry.get("group_key"))
+        normalized_place_fields = normalize_map_place_fields(
+            title=data.get("title") or fallback_entry.get("title") or album.get("name") or "Trip stop",
+            country=data.get("country") or fallback_entry.get("country"),
+            state=data.get("state") or fallback_entry.get("state"),
+            city=data.get("city") or fallback_entry.get("city"),
+            region=data.get("region") or fallback_entry.get("region"),
+            location_label=data.get("location_label") or fallback_entry.get("location_label"),
+            group_key=group_key,
+        )
         now = _utc_now()
         return {
             "album_id": album["id"],
             "album_name": album.get("name") or "Untitled album",
-            "title": str(data.get("title") or fallback_entry.get("title") or album.get("name") or "Trip stop").strip(),
+            "title": normalized_place_fields["title"],
             "latitude": float(data.get("latitude") if isinstance(data.get("latitude"), (int, float)) else fallback_entry["latitude"]),
             "longitude": float(
                 data.get("longitude") if isinstance(data.get("longitude"), (int, float)) else fallback_entry["longitude"]
             ),
-            "country": str(data.get("country") or fallback_entry.get("country") or "").strip() or None,
-            "state": str(data.get("state") or fallback_entry.get("state") or "").strip() or None,
-            "city": str(data.get("city") or fallback_entry.get("city") or "").strip() or None,
-            "region": str(data.get("region") or fallback_entry.get("region") or "").strip() or None,
-            "location_label": str(data.get("location_label") or fallback_entry.get("location_label") or "").strip() or None,
+            "country": normalized_place_fields["country"],
+            "state": normalized_place_fields["state"],
+            "city": normalized_place_fields["city"],
+            "region": normalized_place_fields["region"],
+            "location_label": normalized_place_fields["location_label"],
+            "country_slug": normalized_place_fields["country_slug"],
+            "state_slug": normalized_place_fields["state_slug"],
+            "city_slug": normalized_place_fields["city_slug"],
+            "region_slug": normalized_place_fields["region_slug"],
+            "location_slug": normalized_place_fields["location_slug"],
+            "title_slug": normalized_place_fields["title_slug"],
+            "storage_path": normalized_place_fields["storage_path"],
             "group_key": group_key,
             "icon_key": group_to_icon_key(group_key),
             "summary": str(data.get("summary") or fallback_entry.get("summary") or "").strip() or None,
@@ -335,18 +354,34 @@ def build_auto_map_entry(
     city = place_hint.get("city") if place_hint else None
     region = place_hint.get("region") if place_hint else _match_region_hint(corpus)
     location_label = place_hint.get("location_label") if place_hint else _match_location_hint(corpus) or city or region or country
+    normalized_place_fields = normalize_map_place_fields(
+        title=album.get("name") or location_label or "Trip stop",
+        country=country,
+        state=state,
+        city=city,
+        region=region,
+        location_label=location_label,
+        group_key=inferred_group,
+    )
 
     return {
         "album_id": album["id"],
         "album_name": album.get("name") or "Untitled album",
-        "title": str(album.get("name") or location_label or "Trip stop").strip(),
+        "title": normalized_place_fields["title"],
         "latitude": latitude,
         "longitude": longitude,
-        "country": country,
-        "state": state,
-        "city": city,
-        "region": region,
-        "location_label": str(location_label or "").strip() or None,
+        "country": normalized_place_fields["country"],
+        "state": normalized_place_fields["state"],
+        "city": normalized_place_fields["city"],
+        "region": normalized_place_fields["region"],
+        "location_label": normalized_place_fields["location_label"],
+        "country_slug": normalized_place_fields["country_slug"],
+        "state_slug": normalized_place_fields["state_slug"],
+        "city_slug": normalized_place_fields["city_slug"],
+        "region_slug": normalized_place_fields["region_slug"],
+        "location_slug": normalized_place_fields["location_slug"],
+        "title_slug": normalized_place_fields["title_slug"],
+        "storage_path": normalized_place_fields["storage_path"],
         "group_key": inferred_group,
         "icon_key": group_to_icon_key(inferred_group),
         "summary": summary,
@@ -413,11 +448,34 @@ def merge_map_entry(
     merged_entry["updated_at"] = _utc_now()
     merged_entry["created_at"] = str(base_entry.get("created_at") or merged_entry["updated_at"])
 
-    title = str(merged_entry.get("title") or "").strip()
     group_key = normalize_group_key(merged_entry.get("group_key"))
     merged_entry["group_key"] = group_key
     if not str(merged_entry.get("icon_key") or "").strip():
         merged_entry["icon_key"] = group_to_icon_key(group_key)
+    normalized_place_fields = normalize_map_place_fields(
+        title=merged_entry.get("title"),
+        country=merged_entry.get("country"),
+        state=merged_entry.get("state"),
+        city=merged_entry.get("city"),
+        region=merged_entry.get("region"),
+        location_label=merged_entry.get("location_label"),
+        group_key=group_key,
+    )
+    merged_entry["title"] = normalized_place_fields["title"]
+    merged_entry["country"] = normalized_place_fields["country"]
+    merged_entry["state"] = normalized_place_fields["state"]
+    merged_entry["city"] = normalized_place_fields["city"]
+    merged_entry["region"] = normalized_place_fields["region"]
+    merged_entry["location_label"] = normalized_place_fields["location_label"]
+    merged_entry["country_slug"] = normalized_place_fields["country_slug"]
+    merged_entry["state_slug"] = normalized_place_fields["state_slug"]
+    merged_entry["city_slug"] = normalized_place_fields["city_slug"]
+    merged_entry["region_slug"] = normalized_place_fields["region_slug"]
+    merged_entry["location_slug"] = normalized_place_fields["location_slug"]
+    merged_entry["title_slug"] = normalized_place_fields["title_slug"]
+    merged_entry["storage_path"] = normalized_place_fields["storage_path"]
+
+    title = str(merged_entry.get("title") or "").strip()
     latitude = merged_entry.get("latitude")
     longitude = merged_entry.get("longitude")
     if not title or not group_key or latitude is None or longitude is None:

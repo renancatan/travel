@@ -152,11 +152,36 @@
     - region
     - group
     - icon
+- [x] Add a first-pass canonical map-place normalization layer:
+  - normalize country, state, city, and region labels after the single map AI call
+  - derive stable slugs for future blob/S3 organization
+  - expose a logical storage-path preview in the Step 5 UI
+- [ ] Standardize map place naming without maintaining giant manual country/city lists:
+  - keep map generation as one LLM call, not a separate agent flow
+  - normalize AI output into canonical place fields after generation
+  - use stable country naming at least at the ISO/common-name level
+  - avoid free-text drift such as `Brasil` vs `Brazil` or `Sao Paulo` vs `São Paulo` becoming separate paths
+  - define how city/state normalization should behave when GPS exists vs when only prompt/description exists
+  - keep album/reel description stronger than weak GPS hints when the text clearly identifies the place
+- [ ] Define future storage hierarchy for travel map assets and media references:
+  - support logical blob/S3-style paths such as:
+    - `user/travel/country/state/city/place-group/trip-slug/...`
+  - make sure normalized place slugs can safely drive those paths
+  - keep storage layout separate from UI labels so we can rename display text without breaking object organization
+- [ ] Expand map stop presentation beyond a plain pin:
+  - attach the chosen group icon automatically
+  - attach selected images and/or the chosen reel preview to the map stop
+  - revisit the legacy map-card behavior and bring back a richer stop preview instead of only a default marker
 - [ ] Revisit Step 5 map UX after real usage:
   - verify whether `Use chosen reel` / `Map only` switching feels obvious enough
   - decide whether the chosen reel should auto-enable map mode or stay an explicit button
   - keep the map prompt lightweight without making the step feel hidden
 - [ ] Build a shareable public map page.
+- [x] Build a first public-style map preview page:
+  - add `/map`
+  - list saved map stops
+  - show richer stop cards with group icon, summary, canonical path, and chosen media preview
+  - link to it directly from Step 5
 - [ ] Add filters by country, category, and trip.
 - [ ] Support manual location correction when metadata is wrong or missing.
 - [ ] Keep the map usable even if the user skips social posting.

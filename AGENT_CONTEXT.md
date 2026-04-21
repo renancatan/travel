@@ -79,6 +79,7 @@ Map draft:
 - optional `Map only` mode exists when the user wants to build the map stop without tying it to a chosen reel yet
 - map AI accepts a direct user prompt such as `petar caves`
 - prompt should outweigh weak GPS when it clearly implies the place
+- map generation should stay a single LLM flow for now, not a separate agent-style pipeline
 - edit title, group, icon, coordinates, country, state, city, region, location label, and summary
 - save the map draft back onto the album
 - open the current draft in OpenStreetMap for a quick location sanity check
@@ -123,6 +124,10 @@ Current backend capabilities:
 - first-pass map draft persistence attached directly to each album record
 - separate map-AI generation that can resolve place hierarchy and map grouping from prompt + reel + album context
 - the dedicated map AI now defaults to the Azure/OpenAI `gpt4o` route instead of Gemini
+- map entries now pass through a first-pass canonical place normalizer:
+  - country/state/city/region display values are cleaned after the map AI step
+  - stable slugs are derived for those fields
+  - a logical storage path preview is generated for future blob/S3 organization
 - ISO-based video parsing for common `mp4` / `mov` style uploads without external tooling
 - browser-side video frame sampling so uploaded clips can provide real visual samples to the AI review flow
 - optional `ffprobe` enrichment and optional `ffmpeg` thumbnail generation when those binaries are available
@@ -165,8 +170,10 @@ Implemented in `apps/web`:
   - switch between `Use chosen reel` and `Map only`
   - send a dedicated prompt into a separate map-AI call
   - show/edit group, icon, coords, country, state, city, region, location label, and summary
+  - show the current canonical place hierarchy and storage-path preview
   - save that draft back to the album
   - open the current draft in OpenStreetMap
+  - open the new `/map` public-style preview page directly from Step 5
 - the `Render reel` button is now disabled when `ffmpeg` is unavailable, so the app no longer fires avoidable `409` render requests on machines without local media tooling
 - AI reel variants can now be rendered as real compare previews before manual editing starts
 - the detailed reel editor now stays locked until one rendered AI reel is chosen
@@ -244,6 +251,20 @@ Implemented in `apps/web`:
   - chosen-reel-aware
   - map-only capable
   - with state/city/group support in the saved schema
+  - but place canonicalization is still first-pass and needs a stronger normalization pass before public map scale
+- current map entries now also persist canonical path fields:
+  - `country_slug`
+  - `state_slug`
+  - `city_slug`
+  - `region_slug`
+  - `location_slug`
+  - `title_slug`
+  - `storage_path`
+- there is now a first public-style map preview page at `/map`:
+  - it fetches saved albums with map entries
+  - shows a stop list in the sidebar
+  - renders a richer stop card with icon, summary, canonical path, GPS link, and selected media preview
+  - this now carries more of the legacy-map feel than the raw OpenStreetMap pin alone
 
 ### Operational note
 
@@ -291,6 +312,18 @@ Implemented in `apps/web`:
   - no public map page yet
   - no clustering or filters yet
   - no reverse geocoding yet, so country/region/location labels are still simple heuristic suggestions
+- map naming still needs canonicalization work before we trust it as a long-term storage path source:
+  - country, state, and city should converge on standard names without us maintaining giant manual lists
+  - prompt/description should remain stronger than weak GPS when they clearly identify the stop
+  - future blob/S3 layout should be able to use normalized place slugs such as:
+    - `user/travel/country/state/city/group/trip-slug/...`
+- public map presentation is still minimal:
+  - current OpenStreetMap check is mainly a coordinate sanity check
+  - `/map` is now the first richer stop-preview surface
+  - later public map work should still add:
+    - filters
+    - actual marker/canvas behavior
+    - image/reel overlays directly on the interactive map layer
 - AI now generates first-pass reel variants at different target lengths:
   - `Quick 10s`
   - `Story 15s`

@@ -85,20 +85,39 @@ class AlbumSuggestionService:
                 pass
 
         prompt = self._build_text_prompt(album)
-        data = self.router.ask_json(prompt, model_alias="ggl2")
-        normalized_data = self._normalize_suggestion_payload(data, album)
-        curation_payload = self._build_curation_payload(
-            album,
-            media_insights=normalized_data["media_insights"],
-            caption_ideas=normalized_data["caption_ideas"],
-            reel_variant_request=reel_variant_request,
-        )
-        return {
-            **normalized_data,
-            **curation_payload,
-            "analysis_mode": "metadata_fallback",
-            "route": self.router.get_last_resolution(),
-        }
+        try:
+            data = self.router.ask_json(prompt, model_alias="ggl2")
+            normalized_data = self._normalize_suggestion_payload(data, album)
+            curation_payload = self._build_curation_payload(
+                album,
+                media_insights=normalized_data["media_insights"],
+                caption_ideas=normalized_data["caption_ideas"],
+                reel_variant_request=reel_variant_request,
+            )
+            return {
+                **normalized_data,
+                **curation_payload,
+                "analysis_mode": "metadata_fallback",
+                "route": self.router.get_last_resolution(),
+            }
+        except Exception as exc:
+            normalized_data = self._normalize_suggestion_payload({}, album)
+            curation_payload = self._build_curation_payload(
+                album,
+                media_insights=normalized_data["media_insights"],
+                caption_ideas=normalized_data["caption_ideas"],
+                reel_variant_request=reel_variant_request,
+            )
+            return {
+                **normalized_data,
+                **curation_payload,
+                "analysis_mode": "metadata_fallback",
+                "route": {
+                    **(self.router.get_last_resolution() or {}),
+                    "llm_failed": True,
+                    "llm_error": str(exc),
+                },
+            }
 
     def generate_description(self, album: dict[str, Any]) -> dict[str, Any]:
         multimodal_parts = self._build_multimodal_description_parts(album) if self.gemini_client and types else []
@@ -127,12 +146,23 @@ class AlbumSuggestionService:
                 pass
 
         prompt = self._build_description_text_prompt(album)
-        data = self.router.ask_json(prompt, model_alias="ggl2")
-        return {
-            **self._normalize_description_payload(data),
-            "analysis_mode": "metadata_fallback",
-            "route": self.router.get_last_resolution(),
-        }
+        try:
+            data = self.router.ask_json(prompt, model_alias="ggl2")
+            return {
+                **self._normalize_description_payload(data),
+                "analysis_mode": "metadata_fallback",
+                "route": self.router.get_last_resolution(),
+            }
+        except Exception as exc:
+            return {
+                **self._normalize_description_payload({}),
+                "analysis_mode": "metadata_fallback",
+                "route": {
+                    **(self.router.get_last_resolution() or {}),
+                    "llm_failed": True,
+                    "llm_error": str(exc),
+                },
+            }
 
     def upgrade_cached_suggestion(self, album: dict[str, Any], cached_suggestion: dict[str, Any]) -> dict[str, Any]:
         normalized_data = self._normalize_suggestion_payload(cached_suggestion, album)
@@ -387,13 +417,7 @@ class AlbumSuggestionService:
 
     @staticmethod
     def _parse_json(text: str) -> dict[str, Any]:
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            candidate = MultiProviderRouter._extract_first_json_object(text)
-            if candidate is None:
-                raise
-            return json.loads(candidate)
+        return MultiProviderRouter._parse_json_text(text)
 
     @staticmethod
     def _normalize_suggestion_payload(payload: dict[str, Any], album: dict[str, Any]) -> dict[str, Any]:

@@ -63,8 +63,25 @@ class MultiProviderRouter:
         model_alias: str | None = None,
         temperature: float = 0.1,
     ) -> dict[str, Any]:
+        requested_alias = model_alias or self.default_model_alias
         text = self._generate(prompt=prompt, model_alias=model_alias, temperature=temperature, json_mode=True)
-        return self._parse_json_text(text)
+        original_resolution = dict(self.last_resolution or {})
+
+        try:
+            return self._parse_json_text(text)
+        except json.JSONDecodeError as exc:
+            repaired = self._repair_json_response(
+                raw_text=text,
+                requested_alias=requested_alias,
+                parse_error=exc,
+            )
+            self.last_resolution = {
+                **original_resolution,
+                "json_repair_used": True,
+                "json_repair_model": repaired["repair_model"],
+                "json_parse_error": str(exc),
+            }
+            return repaired["data"]
 
     def get_last_resolution(self) -> dict[str, object] | None:
         return self.last_resolution
@@ -260,13 +277,129 @@ class MultiProviderRouter:
 
     @staticmethod
     def _parse_json_text(text: str) -> dict[str, Any]:
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            candidate = MultiProviderRouter._extract_first_json_object(text)
-            if candidate is None:
-                raise
-            return json.loads(candidate)
+        candidate_errors: list[json.JSONDecodeError] = []
+        for candidate in MultiProviderRouter._candidate_json_texts(text):
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError as exc:
+                candidate_errors.append(exc)
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+            raise json.JSONDecodeError("JSON payload was not an object.", candidate, 0)
+
+        if candidate_errors:
+            raise candidate_errors[-1]
+        raise json.JSONDecodeError("No JSON object found in model response.", text, 0)
+
+    @staticmethod
+    def _candidate_json_texts(text: str) -> list[str]:
+        raw_text = (text or "").strip()
+        candidates: list[str] = []
+
+        def add_candidate(value: str | None) -> None:
+            normalized = (value or "").strip()
+            if normalized and normalized not in candidates:
+                candidates.append(normalized)
+
+        add_candidate(raw_text)
+        add_candidate(MultiProviderRouter._strip_markdown_fences(raw_text))
+
+        extracted_object = MultiProviderRouter._extract_first_json_object(raw_text)
+        add_candidate(extracted_object)
+        add_candidate(MultiProviderRouter._strip_markdown_fences(extracted_object or ""))
+
+        for candidate in list(candidates):
+            add_candidate(MultiProviderRouter._sanitize_json_candidate(candidate))
+
+        return candidates
+
+    @staticmethod
+    def _strip_markdown_fences(text: str) -> str:
+        stripped = (text or "").strip()
+        if stripped.startswith("```"):
+            stripped = re.sub(r"^```(?:json)?\s*", "", stripped, flags=re.IGNORECASE)
+            stripped = re.sub(r"\s*```$", "", stripped)
+        return stripped.strip()
+
+    @staticmethod
+    def _sanitize_json_candidate(text: str) -> str:
+        candidate = text.strip()
+        if not candidate:
+            return candidate
+        candidate = MultiProviderRouter._escape_newlines_inside_strings(candidate)
+        candidate = re.sub(r",(\s*[}\]])", r"\1", candidate)
+        return candidate
+
+    @staticmethod
+    def _escape_newlines_inside_strings(text: str) -> str:
+        parts: list[str] = []
+        in_string = False
+        escape = False
+
+        for char in text:
+            if escape:
+                parts.append(char)
+                escape = False
+                continue
+
+            if char == "\\":
+                parts.append(char)
+                escape = True
+                continue
+
+            if char == '"':
+                parts.append(char)
+                in_string = not in_string
+                continue
+
+            if in_string and char == "\n":
+                parts.append("\\n")
+                continue
+
+            if in_string and char == "\r":
+                continue
+
+            parts.append(char)
+
+        return "".join(parts)
+
+    def _repair_json_response(
+        self,
+        *,
+        raw_text: str,
+        requested_alias: str,
+        parse_error: json.JSONDecodeError,
+    ) -> dict[str, Any]:
+        repair_alias = self._preferred_json_repair_alias(requested_alias)
+        repair_prompt = (
+            "Repair the following malformed JSON from a travel-media app.\n"
+            "Return ONLY one valid JSON object.\n"
+            "Keep the original keys and preserve as much content as possible.\n"
+            "If a field is truncated or unclear, keep it short but valid rather than inventing extra structure.\n"
+            f"Parser error: {parse_error}\n"
+            "Malformed JSON:\n"
+            f"{raw_text}"
+        )
+
+        repaired_text = self._generate(
+            prompt=repair_prompt,
+            model_alias=repair_alias,
+            temperature=0.0,
+            json_mode=True,
+        )
+        repaired_data = self._parse_json_text(repaired_text)
+        return {"data": repaired_data, "repair_model": repair_alias}
+
+    def _preferred_json_repair_alias(self, requested_alias: str) -> str:
+        normalized_requested_alias = self._normalize_alias(requested_alias)
+        if normalized_requested_alias != "gpt4":
+            try:
+                self._resolve_route("gpt4")
+                return "gpt4"
+            except Exception:
+                pass
+        return normalized_requested_alias or "ggl2"
 
     @staticmethod
     def _extract_first_json_object(text: str) -> str | None:

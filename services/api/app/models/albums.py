@@ -139,10 +139,17 @@ class MapEntryResponse(BaseModel):
     latitude: float
     longitude: float
     country: str | None = None
+    country_slug: str | None = None
     state: str | None = None
+    state_slug: str | None = None
     city: str | None = None
+    city_slug: str | None = None
     region: str | None = None
+    region_slug: str | None = None
     location_label: str | None = None
+    location_slug: str | None = None
+    title_slug: str | None = None
+    storage_path: str | None = None
     group_key: str
     icon_key: str
     summary: str | None = None

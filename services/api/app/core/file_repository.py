@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from services.api.app.core.map_place_normalizer import normalize_map_place_fields
 from services.api.app.core.settings import get_settings
 from services.api.app.core.media_metadata import enrich_saved_media_metadata
 
@@ -480,6 +481,16 @@ class FileRepository:
         if not title or not group_key or not icon_key or not album_id or not album_name:
             return None
 
+        normalized_place_fields = normalize_map_place_fields(
+            title=title,
+            country=map_entry.get("country"),
+            state=map_entry.get("state"),
+            city=map_entry.get("city"),
+            region=map_entry.get("region"),
+            location_label=map_entry.get("location_label"),
+            group_key=group_key,
+        )
+
         selected_media_ids = [
             str(media_id).strip()
             for media_id in map_entry.get("selected_media_ids") or []
@@ -489,14 +500,21 @@ class FileRepository:
         return {
             "album_id": album_id,
             "album_name": album_name,
-            "title": title,
+            "title": normalized_place_fields["title"],
             "latitude": float(latitude),
             "longitude": float(longitude),
-            "country": str(map_entry.get("country") or "").strip() or None,
-            "state": str(map_entry.get("state") or "").strip() or None,
-            "city": str(map_entry.get("city") or "").strip() or None,
-            "region": str(map_entry.get("region") or "").strip() or None,
-            "location_label": str(map_entry.get("location_label") or "").strip() or None,
+            "country": normalized_place_fields["country"],
+            "state": normalized_place_fields["state"],
+            "city": normalized_place_fields["city"],
+            "region": normalized_place_fields["region"],
+            "location_label": normalized_place_fields["location_label"],
+            "country_slug": normalized_place_fields["country_slug"],
+            "state_slug": normalized_place_fields["state_slug"],
+            "city_slug": normalized_place_fields["city_slug"],
+            "region_slug": normalized_place_fields["region_slug"],
+            "location_slug": normalized_place_fields["location_slug"],
+            "title_slug": normalized_place_fields["title_slug"],
+            "storage_path": normalized_place_fields["storage_path"],
             "group_key": group_key,
             "icon_key": icon_key,
             "summary": str(map_entry.get("summary") or "").strip() or None,

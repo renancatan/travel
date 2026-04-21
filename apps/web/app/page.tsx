@@ -53,10 +53,17 @@ type MapEntry = {
   latitude: number;
   longitude: number;
   country: string | null;
+  country_slug: string | null;
   state: string | null;
+  state_slug: string | null;
   city: string | null;
+  city_slug: string | null;
   region: string | null;
+  region_slug: string | null;
   location_label: string | null;
+  location_slug: string | null;
+  title_slug: string | null;
+  storage_path: string | null;
   group_key: string;
   icon_key: string;
   summary: string | null;
@@ -1207,6 +1214,16 @@ export default function Page() {
   const selectedMapMediaLabels = selectedMapMediaIds
     .map((mediaId) => workflowAlbum?.media_items.find((item) => item.id === mediaId)?.original_filename ?? null)
     .filter((value): value is string => Boolean(value));
+  const canonicalMapHierarchy = workflowAlbum?.map_entry
+    ? [
+        workflowAlbum.map_entry.country,
+        workflowAlbum.map_entry.state,
+        workflowAlbum.map_entry.city,
+        workflowAlbum.map_entry.region,
+      ]
+        .filter((value): value is string => Boolean(value && value.trim()))
+        .join(" / ")
+    : "";
 
   function clearUploadSelection() {
     const fileInput = document.getElementById("upload-input") as HTMLInputElement | null;
@@ -4796,6 +4813,11 @@ export default function Page() {
                         >
                           {isSavingMapEntry ? "Saving..." : "Save map draft"}
                         </button>
+                        {workflowAlbum.map_entry ? (
+                          <a className="button-secondary" href="/map" rel="noreferrer" target="_blank">
+                            Open travel map preview
+                          </a>
+                        ) : null}
                         {getOpenStreetMapUrl(editableMapDraft) ? (
                           <a
                             className="button-secondary"
@@ -4803,9 +4825,17 @@ export default function Page() {
                             rel="noreferrer"
                             target="_blank"
                           >
-                            Open in OpenStreetMap
+                            Open GPS in OpenStreetMap
                           </a>
                         ) : null}
+                      </div>
+
+                      <div className="selected-album-card">
+                        <strong>OpenStreetMap check</strong>
+                        <span>
+                          This is only a coordinate sanity check in OpenStreetMap. The richer travel-map card with custom
+                          icon, images, and reel preview will live in our own map page later.
+                        </span>
                       </div>
 
                       {editableMapDraft ? (
@@ -4953,6 +4983,21 @@ export default function Page() {
                                 </div>
                               ) : null}
                             </div>
+                            {workflowAlbum.map_entry?.storage_path ? (
+                              <div className="selected-album-card">
+                                <strong>Canonical place path</strong>
+                                {canonicalMapHierarchy ? (
+                                  <div>
+                                    <strong>Place labels</strong>
+                                    <p>{canonicalMapHierarchy}</p>
+                                  </div>
+                                ) : null}
+                                <div>
+                                  <strong>Storage key</strong>
+                                  <code>{workflowAlbum.map_entry.storage_path}</code>
+                                </div>
+                              </div>
+                            ) : null}
                           </div>
 
                           <label className="field">

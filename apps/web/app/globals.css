@@ -916,6 +916,82 @@ button {
   line-height: 1.4;
 }
 
+.map-shell .grid {
+  align-items: stretch;
+}
+
+.map-preview-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.map-stop-card {
+  display: grid;
+  gap: 16px;
+}
+
+.map-stop-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.map-stop-header h2 {
+  margin: 0 0 8px;
+  font-size: clamp(1.8rem, 3vw, 2.6rem);
+}
+
+.map-stop-header p {
+  margin: 0;
+}
+
+.map-stop-summary {
+  margin: 0 !important;
+  font-size: 1.05rem;
+  line-height: 1.65;
+}
+
+.map-media-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.map-media-card {
+  overflow: hidden;
+  border-radius: 22px;
+  border: 1px solid var(--line);
+  background: var(--card-strong);
+  display: grid;
+}
+
+.map-media-thumb {
+  width: 100%;
+  aspect-ratio: 9 / 12;
+  object-fit: cover;
+  display: block;
+  background:
+    linear-gradient(180deg, rgba(20, 108, 106, 0.12), rgba(50, 95, 159, 0.08)),
+    #efe6d7;
+}
+
+.map-media-copy {
+  padding: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.map-media-copy strong {
+  display: block;
+}
+
+.map-media-copy span {
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .review-header {
   display: flex;
   justify-content: space-between;
@@ -1035,7 +1111,8 @@ button {
   .meta-grid,
   .ai-grid,
   .reel-draft-grid,
-  .variant-custom-grid {
+  .variant-custom-grid,
+  .map-media-grid {
     grid-template-columns: 1fr;
   }
 
@@ -1055,7 +1132,8 @@ button {
   .draft-step-header,
   .draft-step-meta,
   .reel-plan-header,
-  .reel-plan-step-header {
+  .reel-plan-step-header,
+  .map-stop-header {
     flex-direction: column;
   }
 
