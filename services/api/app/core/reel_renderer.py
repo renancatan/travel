@@ -54,6 +54,7 @@ class ReelRenderer:
             reel_draft.get("video_strategy"),
             self.ffmpeg_binary,
         )
+        filter_settings = self._normalize_filter_settings(reel_draft.get("filter_settings"))
 
         output_path = self._resolve_output_path(output_relative_path)
         concat_path = self._resolve_output_path(concat_relative_path)
@@ -84,6 +85,7 @@ class ReelRenderer:
                 staged_clip = {
                     **clip,
                     "audio_strategy": reel_draft.get("audio_strategy"),
+                    "filter_settings": filter_settings,
                     "output_relative_path": self._swap_render_root(
                         str(clip.get("output_relative_path") or "").strip(),
                         render_root_relative,
@@ -171,6 +173,7 @@ class ReelRenderer:
         frame_mode = self._normalize_frame_mode(clip.get("frame_mode"))
         focus_x_percent = self._normalize_focus_percent(clip.get("focus_x_percent"))
         focus_y_percent = self._normalize_focus_percent(clip.get("focus_y_percent"))
+        filter_settings = self._normalize_filter_settings(clip.get("filter_settings"))
 
         if not source_relative_path or not output_relative_path:
             raise ReelRenderError("A render clip is missing its source or output path.")
@@ -191,6 +194,10 @@ class ReelRenderer:
         command = [self.ffmpeg_binary, "-y"]
         if media_kind == "video":
             has_audio = self._video_has_audio(source_path)
+            vf_chain = self._apply_reel_filter_settings_to_vf_chain(
+                VF_CHAIN,
+                filter_settings=filter_settings,
+            )
             if clip_start_seconds is not None:
                 command.extend(["-ss", f"{clip_start_seconds:.2f}"])
             if clip_end_seconds is not None:
@@ -201,7 +208,7 @@ class ReelRenderer:
                         "-i",
                         str(source_path),
                         "-vf",
-                        VF_CHAIN,
+                        vf_chain,
                         "-map",
                         "0:v:0",
                         "-map",
@@ -232,7 +239,7 @@ class ReelRenderer:
                         "-i",
                         "anullsrc=channel_layout=stereo:sample_rate=48000",
                         "-vf",
-                        VF_CHAIN,
+                        vf_chain,
                         "-map",
                         "0:v:0",
                         "-map",
@@ -258,6 +265,7 @@ class ReelRenderer:
                 frame_mode=frame_mode,
                 focus_x_percent=focus_x_percent,
                 focus_y_percent=focus_y_percent,
+                filter_settings=filter_settings,
             )
             command.extend(
                 [
@@ -391,20 +399,52 @@ class ReelRenderer:
             numeric = 50.0
         return round(min(100.0, max(0.0, numeric)), 1)
 
+    @staticmethod
+    def _normalize_filter_settings(value: Any) -> dict[str, float]:
+        if not isinstance(value, dict):
+            value = {}
+
+        def _coerce(raw: Any, default: float, minimum: float, maximum: float) -> float:
+            try:
+                numeric = float(raw)
+            except (TypeError, ValueError):
+                numeric = default
+            return round(min(maximum, max(minimum, numeric)), 2)
+
+        return {
+            "brightness": _coerce(value.get("brightness"), 0.0, -0.3, 0.3),
+            "contrast": _coerce(value.get("contrast"), 1.0, 0.5, 1.8),
+            "saturation": _coerce(value.get("saturation"), 1.0, 0.0, 2.0),
+        }
+
     def _build_image_vf_chain(
         self,
         *,
         frame_mode: str,
         focus_x_percent: float,
         focus_y_percent: float,
+        filter_settings: dict[str, float],
     ) -> str:
         if frame_mode != "cover":
-            return VF_CHAIN
+            return self._apply_reel_filter_settings_to_vf_chain(
+                VF_CHAIN,
+                filter_settings=filter_settings,
+            )
 
         x_ratio = focus_x_percent / 100
         y_ratio = focus_y_percent / 100
-        return (
+        return self._apply_reel_filter_settings_to_vf_chain(
             "scale=1080:1920:force_original_aspect_ratio=increase,"
             f"crop=1080:1920:(iw-1080)*{x_ratio:.3f}:(ih-1920)*{y_ratio:.3f},"
-            "fps=30"
+            "fps=30",
+            filter_settings=filter_settings,
         )
+
+    @staticmethod
+    def _apply_reel_filter_settings_to_vf_chain(base_chain: str, *, filter_settings: dict[str, float]) -> str:
+        brightness = round(float(filter_settings.get("brightness", 0.0)), 2)
+        contrast = round(float(filter_settings.get("contrast", 1.0)), 2)
+        saturation = round(float(filter_settings.get("saturation", 1.0)), 2)
+        if abs(brightness) <= 0.001 and abs(contrast - 1.0) <= 0.001 and abs(saturation - 1.0) <= 0.001:
+            return base_chain
+        return f"{base_chain},eq=brightness={brightness:.2f}:contrast={contrast:.2f}:saturation={saturation:.2f}"

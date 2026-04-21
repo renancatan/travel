@@ -252,6 +252,15 @@ button {
   min-height: 96px;
 }
 
+.filter-grid {
+  display: grid;
+  gap: 14px;
+}
+
+.draft-filter-note {
+  margin-top: 10px !important;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -682,6 +691,39 @@ button {
   max-width: 48%;
 }
 
+.variant-render-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 14px;
+}
+
+.variant-render-card-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.variant-render-card-header > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.variant-render-card-header span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.variant-render-preview {
+  margin-top: 0;
+}
+
 .draft-input {
   padding: 10px 12px;
 }
@@ -851,6 +893,12 @@ button {
 
 .render-preview-meta {
   margin-top: 10px;
+}
+
+.render-look-panel {
+  margin-top: 16px;
+  display: grid;
+  gap: 12px;
 }
 
 .ai-inline-note {

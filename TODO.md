@@ -67,13 +67,19 @@
 - [ ] Continue expanding manual reel editing:
   - richer soundtrack selection and mixing controls
 - [x] Save alternate draft versions and load/delete them from the reel editor.
-- [ ] Add a simple final-reel filter layer before map work:
+- [x] Add a simple final-reel filter layer before map work:
   - one reel-wide filter control set, not per-step
-  - likely first controls: brightness, contrast, saturation
-  - apply it at render time and preview it in the editor if feasible
+  - brightness, contrast, saturation
+  - apply it at render time and preview it live on the rendered reel
+- [x] Move reel-wide look controls to the post-render area so filters are adjusted only after a reel exists.
+- [x] Add an `Auto filter` preset for the final reel look:
+  - brightness `0`
+  - contrast `1.2`
+  - saturation `1.2`
 - [x] Add first-pass AI reel variants across target lengths:
   - suggest multiple reel drafts such as 10s, 15s, and 30s
   - let the user load one suggested variant into the editor
+- [x] Render AI reel variants as real compare previews before manual editing starts.
 - [x] Add an explicit reel target selector for AI review:
   - `Auto`
   - `10s`
@@ -96,9 +102,9 @@
     - images last
 - [ ] Revisit the reel-variant UX:
   - keep variant selection lightweight before showing deeper editing
-  - do not render all variants by default
-  - consider an optional `render all for compare` action later if real usage proves it is worth it
-- [ ] Show advanced reel editing only after the user selects which suggested reel variant(s) they want to keep.
+  - the compare-first flow works now, but the overall target-to-variant-to-editor progression can still be simplified
+  - revisit whether the initial compare render should stay a separate action or become the default path more explicitly
+- [x] Show advanced reel editing only after the user selects which suggested reel variant(s) they want to keep.
 - [ ] Normalize exports for social-ready output sizes and frame rates.
 - [ ] Keep all AI decisions explainable in the UI.
 - [ ] Log accept/reject feedback for future personalization.
@@ -110,6 +116,10 @@
 - [ ] Revisit reel draft save UX:
   - decide whether `Save as version` should also apply/save the active draft edits
   - decide whether `Apply draft edits` should stay separate or be merged into a simpler action model
+- [ ] Revisit compare-reel action layout again after real usage:
+  - the most important actions now sit in the chosen reel card
+  - keep checking whether final export and editor actions still feel too split between the chosen reel card and the lower draft section
+  - keep checking whether the chosen reel card and the lower draft editor still need to be visually merged even more
 - [ ] Revisit the reel-range / variant flow UX:
   - the current selector-to-editor progression feels a bit confusing
   - simplify the number of visible decisions after picking a reel target
@@ -117,7 +127,7 @@
 
 ## Phase 4: Map Experience
 
-- [ ] Define the map entry schema:
+- [x] Define the map entry schema:
   - title
   - coordinates
   - country
@@ -125,6 +135,11 @@
   - category/icon
   - selected media
   - optional notes
+- [x] Add a first-pass album map draft step:
+  - auto-build from album GPS, AI categories, and album summary
+  - edit title, icon, coordinates, country, region, and summary
+  - save the draft back onto the album record
+- [x] Add a `GET /map-entries` foundation endpoint for the later public map page.
 - [ ] Build a shareable public map page.
 - [ ] Add filters by country, category, and trip.
 - [ ] Support manual location correction when metadata is wrong or missing.

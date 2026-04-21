@@ -2,6 +2,25 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+
+class ReelDraftFilterSettingsInput(BaseModel):
+    brightness: float = Field(default=0.0, ge=-0.3, le=0.3)
+    contrast: float = Field(default=1.0, ge=0.5, le=1.8)
+    saturation: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
+class UpdateMapEntryRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    latitude: float | None = None
+    longitude: float | None = None
+    country: str | None = Field(default=None, max_length=120)
+    region: str | None = Field(default=None, max_length=120)
+    location_label: str | None = Field(default=None, max_length=200)
+    icon_key: str | None = Field(default=None, max_length=60)
+    summary: str | None = Field(default=None, max_length=1000)
+    selected_media_ids: list[str] | None = Field(default=None, max_length=8)
+
+
 class CreateAlbumRequest(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = Field(default=None, max_length=1000)
@@ -39,6 +58,7 @@ class ReelDraftEditInput(BaseModel):
     caption: str | None = Field(default=None, max_length=2200)
     cover_media_id: str | None = Field(default=None, max_length=120)
     audio_strategy: str | None = Field(default=None, max_length=80)
+    filter_settings: ReelDraftFilterSettingsInput | None = None
     steps: list[ReelDraftEditStepInput] = Field(min_length=1, max_length=12)
 
 
@@ -95,12 +115,31 @@ class RenderedReelResponse(BaseModel):
     video_strategy: str
 
 
+class MapEntryResponse(BaseModel):
+    album_id: str
+    album_name: str
+    title: str
+    latitude: float
+    longitude: float
+    country: str | None = None
+    region: str | None = None
+    location_label: str | None = None
+    icon_key: str
+    summary: str | None = None
+    selected_media_ids: list[str] = Field(default_factory=list)
+    gps_point_count: int = 0
+    source: str = "album_auto"
+    created_at: str
+    updated_at: str
+
+
 class AlbumResponse(BaseModel):
     id: str
     name: str
     description: str | None
     description_meta: dict | None = None
     cached_suggestion: dict | None = None
+    map_entry: MapEntryResponse | None = None
     rendered_reel: RenderedReelResponse | None = None
     created_at: str
     updated_at: str

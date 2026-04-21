@@ -113,6 +113,12 @@ class ReelDraftStepResponse(BaseModel):
     why: str
 
 
+class ReelFilterSettingsResponse(BaseModel):
+    brightness: float
+    contrast: float
+    saturation: float
+
+
 class ReelDraftResponse(BaseModel):
     draft_name: str
     title: str
@@ -124,6 +130,7 @@ class ReelDraftResponse(BaseModel):
     output_height: int
     fps: int
     audio_strategy: str
+    filter_settings: ReelFilterSettingsResponse
     steps: list[ReelDraftStepResponse]
     assets: list[ReelDraftAssetResponse]
     render_spec: "ReelRenderSpecResponse | None"

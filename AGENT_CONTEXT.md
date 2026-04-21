@@ -58,14 +58,26 @@ Review and AI analysis:
 - per-image notes when available
 - ranked cover, carousel, and reel candidates
 - a first-pass reel plan with ordered beats, suggested durations, and edit notes
+- renderable AI reel variants for compare-first review
+- manual reel editing only after one rendered AI reel is chosen
 - a downloadable reel draft manifest with caption, output settings, steps, selected assets, and a render-ready `ffmpeg` spec
 - a local reel render action that can produce a saved preview/download with preserved source audio on video beats when `ffmpeg` is available
+- post-render reel-look controls that sit below the rendered reel preview
 - a first-pass manual reel editor that can reorder beats, swap assets, edit title/caption/cover, and adjust clip windows or durations before save/render
 - a simple reel-wide audio mode toggle so the user can preserve source audio or mute the reel before rendering
 - draft-step reordering now supports drag-and-drop in addition to move up/down buttons
 - still-image beats now support framing controls so the user can fit the full image or fill/crop the frame and adjust focus before rendering
 - draft-step editing now includes a live per-step preview so image framing and video clip-window changes are visible before re-render
 - reel drafts now support saved alternate versions so the user can snapshot multiple edit ideas, reload them into the editor, and delete old versions
+
+### Step 5
+
+Map draft:
+
+- generate one saved map draft from album GPS plus the current AI read
+- edit title, icon, coordinates, country, region, location label, and summary
+- save the map draft back onto the album
+- open the current draft in OpenStreetMap for a quick location sanity check
 
 ## What Has Been Built
 
@@ -94,12 +106,16 @@ Implemented in `services/api`:
 - `POST /albums/{album_id}/description/auto`
 - `POST /albums/{album_id}/suggestions`
 - `POST /albums/{album_id}/reel-draft`
+- `POST /albums/{album_id}/map-entry/auto`
+- `PATCH /albums/{album_id}/map-entry`
+- `GET /map-entries`
 
 Current backend capabilities:
 
 - local album persistence
 - local media storage
 - image metadata extraction including JPEG EXIF timestamp, device, and GPS when present
+- first-pass map draft persistence attached directly to each album record
 - ISO-based video parsing for common `mp4` / `mov` style uploads without external tooling
 - browser-side video frame sampling so uploaded clips can provide real visual samples to the AI review flow
 - optional `ffprobe` enrichment and optional `ffmpeg` thumbnail generation when those binaries are available
@@ -138,7 +154,27 @@ Implemented in `apps/web`:
 - reel draft export UI now avoids showing raw storage paths and long overflowing identifiers in the main review cards
 - reel draft export UI now shows the render backend, working directory, output paths, render notes, render clips, and copyable shell commands
 - the UI now includes `Render reel`, an inline rendered preview, and `Download rendered reel` when a finished render exists
+- a new Step 5 map draft panel can now:
+  - auto-build a location draft from GPS media
+  - show/edit icon, title, coords, place labels, and summary
+  - save that draft back to the album
+  - open the current draft in OpenStreetMap
 - the `Render reel` button is now disabled when `ffmpeg` is unavailable, so the app no longer fires avoidable `409` render requests on machines without local media tooling
+- AI reel variants can now be rendered as real compare previews before manual editing starts
+- the detailed reel editor now stays locked until one rendered AI reel is chosen
+- reel-wide look controls now live in the selected compare-reel card instead of inside the step editor
+- there is now an `Auto filter` preset for the final reel look:
+  - brightness `0`
+  - contrast `1.2`
+  - saturation `1.2`
+- the selected compare-reel card now exposes the most important immediate actions:
+  - download compare reel
+  - render final reel
+  - download final reel when available
+- when a compare reel is selected for editing, that chosen reel card is now the single active workspace:
+  - it shows the compare reel first
+  - after final render, it swaps to the current rendered output for that same draft
+  - the duplicate lower rendered-reel preview is hidden for that selected-variant flow to avoid two unrelated reel surfaces
 
 ## Current State
 
@@ -149,6 +185,7 @@ Implemented in `apps/web`:
 - album creation, upload, description generation, description save, and AI review all work end to end
 - local reel rendering now works end to end on this machine with installed `ffmpeg`
 - local reel rendering now exports a final `.mp4` with both H.264 video and AAC audio when the draft includes video beats
+- map draft generation and save now work against real album GPS metadata
 
 ### Recently fixed
 
@@ -186,6 +223,13 @@ Implemented in `apps/web`:
 - reel drafts can now switch between preserved source audio and a fully muted output path before render
 - manual reel editing now supports drag-and-drop beat reordering in addition to the move buttons
 - manual reel editing now supports still-image framing controls with fill/crop plus horizontal and vertical focus
+- compare-first reel selection now works:
+  - render compare reels
+  - preview the actual rendered variants
+  - choose one reel
+  - only then unlock detailed editing and final export actions
+- saving draft edits or saving a version no longer kicks the user back into the locked compare state for the same album
+- the chosen reel workspace now stays visually tied to the same draft the user is editing below, so render/filter/export actions no longer feel split across two separate reel previews
 
 ### Operational note
 
@@ -193,6 +237,7 @@ Implemented in `apps/web`:
 - If the browser shows fetch errors again, first verify the API with `/healthz` before assuming the frontend flow is broken
 - `GET /runtime` now reports media tooling availability so it is easy to see whether `ffmpeg` / `ffprobe` are installed locally
 - `GET /runtime` now also exposes reel-variant preset metadata so the frontend duration selector can stay in sync with the backend presets
+- map-entry drafts are stored in each album `album.json` for now, and `GET /map-entries` is the first public-map foundation endpoint
 
 ## Known Gaps
 
@@ -214,13 +259,19 @@ Implemented in `apps/web`:
   - adjust clip windows and durations
   - edit title, caption, and cover
 - the editor now supports add/remove beats, drag-and-drop reordering, audio mode changes, still-image framing, live step previews, and saved alternate draft versions
+- the editor now also supports one reel-wide look layer with:
+  - brightness
+  - contrast
+  - saturation
+- reel-wide look settings are saved with the draft/version and preview live on the rendered reel before re-render
 - `Reset edits` currently resets the local editor to the last saved/applied draft, not all the way back to a fresh AI rebuild; `Refresh AI read` is the closer "start from AI again" action today
 - there is also an open UX question around reel draft saving:
   - whether `Save as version` should implicitly apply/save the current active edits
   - whether `Apply draft edits` should remain a separate action or be simplified later
-- a simple reel-wide filter layer is now on the roadmap before map work:
-  - likely brightness, contrast, saturation
-  - one final-reel control set instead of per-step filters
+- the first map draft is intentionally local and album-scoped:
+  - no public map page yet
+  - no clustering or filters yet
+  - no reverse geocoding yet, so country/region/location labels are still simple heuristic suggestions
 - AI now generates first-pass reel variants at different target lengths:
   - `Quick 10s`
   - `Story 15s`
@@ -243,13 +294,10 @@ Implemented in `apps/web`:
   - `Motion-first`
   - `Scenic`
 - users can load one suggested AI variant into the editor before continuing with manual edits
+- AI variant compare mode now renders the candidate reels themselves first, so the user can choose from real outputs before opening the detailed editor
 - there is now also a UX note to revisit later:
   - after selecting a reel target, the current step flow still feels a bit confusing
-  - likely direction is to simplify the post-selection flow and delay deeper editing until one variant is clearly chosen
-  - likely direction for compare mode is:
-    - keep variant picking lightweight first
-    - avoid rendering all variants by default
-    - consider an optional `render all for compare` flow later if needed
+  - likely direction is still to simplify the post-selection flow even though deeper editing is now delayed until one variant is clearly chosen
 - longer hero-video variants now try to spread reused clips across distinct non-overlapping windows instead of repeating the same slice when one strong video is reused several times
 - longer variants also now lean on a broader candidate pool and can switch into more still-heavy storytelling instead of overusing one hero video
 - the current fixed variant presets now live in one backend file for easier future tuning:
@@ -283,7 +331,8 @@ Implemented in `apps/web`:
 11. Continue expanding the reel editor with alternate saved draft versions.
 12. Validate the new AI reel variants across 10s / 15s / 30s albums and refine how different they feel in practice.
 13. Keep improving same-length creative variant separation and audience targeting.
-14. Gate deeper editing behind selecting the desired reel variant(s).
+14. Keep refining the compare-first reel flow now that deeper editing is gated behind selecting the desired reel variant.
+15. Revisit whether `Save as version` and `Apply draft edits` should be merged into a simpler action model later.
 
 ## Working Rules For Future Changes
 
@@ -324,6 +373,10 @@ Implemented in `apps/web`:
   - `Balanced`
   - `Motion-first`
   - `Scenic`
+- validate the new compare-first workflow:
+  - render compare reels
+  - choose one rendered reel
+  - then open detailed editing
 - improve reel selection so videos become:
   - one chosen hero clip
   - or a sequence of selected moments across multiple videos

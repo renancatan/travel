@@ -46,6 +46,35 @@ type RenderedReel = {
   video_strategy: string;
 };
 
+type MapEntry = {
+  album_id: string;
+  album_name: string;
+  title: string;
+  latitude: number;
+  longitude: number;
+  country: string | null;
+  region: string | null;
+  location_label: string | null;
+  icon_key: string;
+  summary: string | null;
+  selected_media_ids: string[];
+  gps_point_count: number;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type MapDraftForm = {
+  title: string;
+  latitude: string;
+  longitude: string;
+  country: string;
+  region: string;
+  location_label: string;
+  icon_key: string;
+  summary: string;
+};
+
 type Album = {
   id: string;
   name: string;
@@ -56,6 +85,7 @@ type Album = {
     route?: Record<string, unknown> | null;
   } | null;
   cached_suggestion?: AlbumSuggestion | null;
+  map_entry?: MapEntry | null;
   rendered_reel?: RenderedReel | null;
   created_at: string;
   updated_at: string;
@@ -163,6 +193,12 @@ type ReelRenderSpec = {
   clips: ReelRenderClip[];
 };
 
+type ReelFilterSettings = {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+};
+
 type ReelDraft = {
   draft_name: string;
   title: string;
@@ -174,6 +210,7 @@ type ReelDraft = {
   output_height: number;
   fps: number;
   audio_strategy: string;
+  filter_settings: ReelFilterSettings;
   steps: ReelDraftStep[];
   assets: ReelDraftAsset[];
   render_spec: ReelRenderSpec | null;
@@ -185,6 +222,23 @@ type ReelDraftVersion = {
   created_at: string;
   updated_at: string;
   reel_draft: ReelDraft;
+};
+
+type RenderedVariant = {
+  variant_id: string;
+  label: string;
+  creative_angle: string;
+  target_duration_seconds: number;
+  draft_name: string;
+  relative_path: string;
+  content_type: string;
+  file_size_bytes: number;
+  rendered_at: string;
+  output_width: number;
+  output_height: number;
+  fps: number;
+  estimated_total_duration_seconds: number;
+  video_strategy: string;
 };
 
 type ReelDraftVariant = {
@@ -225,6 +279,7 @@ type AlbumSuggestion = {
   reel_plan: ReelPlan | null;
   reel_draft: ReelDraft | null;
   reel_draft_variants: ReelDraftVariant[];
+  rendered_variant_renders?: RenderedVariant[];
   reel_draft_versions: ReelDraftVersion[];
   reel_variant_request_summary: ReelVariantRequestSummary | null;
   shot_groups: ShotGroup[];
@@ -266,6 +321,14 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8
 const NEW_ALBUM_DRAFT_KEY = "travel-project:new-album-draft";
 const DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS = 30;
 const DEFAULT_MAX_REEL_TARGET_DURATION_SECONDS = 60;
+const MAP_ICON_OPTIONS = [
+  { value: "general", label: "General" },
+  { value: "caves", label: "Cave" },
+  { value: "beaches", label: "Beach" },
+  { value: "bars", label: "Bar / Pub" },
+  { value: "boat", label: "Boat" },
+  { value: "falls", label: "Falls" },
+] as const;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -366,6 +429,25 @@ function normalizeAudioStrategyValue(value: string | null | undefined): "preserv
 
 function formatAudioStrategy(value: string | null | undefined): string {
   return normalizeAudioStrategyValue(value) === "mute_all_audio" ? "mute reel audio" : "keep source audio when available";
+}
+
+function normalizeFilterSettings(value: ReelFilterSettings | null | undefined): ReelFilterSettings {
+  return {
+    brightness: roundToTenth(clampNumber(value?.brightness ?? 0, -0.3, 0.3)),
+    contrast: roundToTenth(clampNumber(value?.contrast ?? 1, 0.5, 1.8)),
+    saturation: roundToTenth(clampNumber(value?.saturation ?? 1, 0, 2)),
+  };
+}
+
+function formatFilterSettings(value: ReelFilterSettings | null | undefined): string {
+  const normalized = normalizeFilterSettings(value);
+  return `brightness ${normalized.brightness >= 0 ? "+" : ""}${normalized.brightness.toFixed(1)} • contrast ${normalized.contrast.toFixed(1)} • saturation ${normalized.saturation.toFixed(1)}`;
+}
+
+function buildCssFilter(value: ReelFilterSettings | null | undefined): string {
+  const normalized = normalizeFilterSettings(value);
+  const brightness = Math.max(0.4, 1 + normalized.brightness);
+  return `brightness(${brightness.toFixed(2)}) contrast(${normalized.contrast.toFixed(2)}) saturate(${normalized.saturation.toFixed(2)})`;
 }
 
 function normalizeFrameModeValue(value: string | null | undefined): "contain" | "cover" {
@@ -548,6 +630,17 @@ function getRenderedReelContentUrl(album: Album | null): string | null {
   return `${API_BASE_URL}/albums/${album.id}/rendered-reel/content?v=${cacheKey}`;
 }
 
+function getRenderedVariantContentUrl(album: Album | null, renderedVariant: RenderedVariant | null): string | null {
+  if (!album || !renderedVariant) {
+    return null;
+  }
+
+  const cacheKey = encodeURIComponent(
+    `${renderedVariant.rendered_at}-${renderedVariant.file_size_bytes}-${renderedVariant.estimated_total_duration_seconds}`,
+  );
+  return `${API_BASE_URL}/albums/${album.id}/rendered-variants/${renderedVariant.variant_id}/content?v=${cacheKey}`;
+}
+
 function getMediaContentUrl(mediaItem: MediaItem | null): string | null {
   if (!mediaItem) {
     return null;
@@ -564,6 +657,59 @@ function getMediaThumbnailUrl(mediaItem: MediaItem | null): string | null {
 
 function normalizeAlbumName(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function buildMapDraftForm(mapEntry: MapEntry | null | undefined): MapDraftForm | null {
+  if (!mapEntry) {
+    return null;
+  }
+
+  return {
+    title: mapEntry.title,
+    latitude: mapEntry.latitude.toFixed(6),
+    longitude: mapEntry.longitude.toFixed(6),
+    country: mapEntry.country ?? "",
+    region: mapEntry.region ?? "",
+    location_label: mapEntry.location_label ?? "",
+    icon_key: mapEntry.icon_key,
+    summary: mapEntry.summary ?? "",
+  };
+}
+
+function parseCoordinateValue(value: string): number | null {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
+}
+
+function getOpenStreetMapUrl(form: MapDraftForm | null): string | null {
+  if (!form) {
+    return null;
+  }
+
+  const latitude = parseCoordinateValue(form.latitude);
+  const longitude = parseCoordinateValue(form.longitude);
+  if (latitude === null || longitude === null) {
+    return null;
+  }
+
+  return `https://www.openstreetmap.org/?mlat=${latitude}&mlon=${longitude}#map=14/${latitude}/${longitude}`;
+}
+
+function getGpsMediaItems(album: Album | null): MediaItem[] {
+  if (!album) {
+    return [];
+  }
+
+  return album.media_items.filter((item) => {
+    const gps = item.gps;
+    if (!gps) {
+      return false;
+    }
+    return typeof gps.latitude === "number" && typeof gps.longitude === "number";
+  });
 }
 
 function upsertAlbum(albums: Album[], updatedAlbum: Album): Album[] {
@@ -618,6 +764,7 @@ function buildReelDraftEditPayload(draft: ReelDraft) {
       caption: draft.caption,
       cover_media_id: draft.cover_media_id,
       audio_strategy: normalizeAudioStrategyValue(draft.audio_strategy),
+      filter_settings: normalizeFilterSettings(draft.filter_settings),
       steps: draft.steps.map((step) => ({
         role: step.role,
         media_id: step.media_id,
@@ -942,6 +1089,11 @@ export default function Page() {
   const [isSavingReelDraftVersion, setIsSavingReelDraftVersion] = useState(false);
   const [deletingReelDraftVersionId, setDeletingReelDraftVersionId] = useState<string | null>(null);
   const [editableReelDraft, setEditableReelDraft] = useState<ReelDraft | null>(null);
+  const [selectedEditorVariantId, setSelectedEditorVariantId] = useState<string | null>(null);
+  const [isRenderingVariantSet, setIsRenderingVariantSet] = useState(false);
+  const [isGeneratingMapEntry, setIsGeneratingMapEntry] = useState(false);
+  const [isSavingMapEntry, setIsSavingMapEntry] = useState(false);
+  const [editableMapDraft, setEditableMapDraft] = useState<MapDraftForm | null>(null);
   const [maxReelClipDurationSeconds, setMaxReelClipDurationSeconds] = useState(
     DEFAULT_MAX_REEL_CLIP_DURATION_SECONDS,
   );
@@ -956,16 +1108,27 @@ export default function Page() {
   const [draggedReelStepIndex, setDraggedReelStepIndex] = useState<number | null>(null);
   const [dragOverReelStepIndex, setDragOverReelStepIndex] = useState<number | null>(null);
   const [isPending, startTransition] = useTransition();
+  const [mapEntryStatus, setMapEntryStatus] = useState<{ tone: "idle" | "ok" | "error"; message: string }>({
+    tone: "idle",
+    message: "Build a first map draft from GPS-tagged media after the album review looks right.",
+  });
 
   const sidebarAlbum = albums.find((album) => album.id === selectedAlbumId) ?? null;
   const workflowAlbum =
     albumMode === "new" ? albums.find((album) => album.id === newAlbumId) ?? null : sidebarAlbum;
   const activeSuggestions = workflowAlbum ? suggestionsByAlbum[workflowAlbum.id] ?? null : null;
   const suggestedReelVariants = activeSuggestions?.reel_draft_variants ?? [];
+  const renderedVariantRenders = activeSuggestions?.rendered_variant_renders ?? [];
   const savedReelDraftVersions = activeSuggestions?.reel_draft_versions ?? [];
   const activeReelVariantSummary = activeSuggestions?.reel_variant_request_summary ?? null;
   const activeDescriptionMeta = workflowAlbum ? descriptionMetaByAlbum[workflowAlbum.id] ?? null : null;
-  const workingReelDraft = editableReelDraft ?? activeSuggestions?.reel_draft ?? null;
+  const isVariantChoiceRequired = suggestedReelVariants.length > 0;
+  const workingReelDraft =
+    isVariantChoiceRequired && !selectedEditorVariantId ? null : editableReelDraft ?? activeSuggestions?.reel_draft ?? null;
+  const selectedEditorVariant =
+    selectedEditorVariantId && selectedEditorVariantId !== "__saved_version__"
+      ? suggestedReelVariants.find((variant) => variant.variant_id === selectedEditorVariantId) ?? null
+      : null;
   const isReelDraftDirty = Boolean(
     editableReelDraft &&
       activeSuggestions?.reel_draft &&
@@ -982,6 +1145,11 @@ export default function Page() {
     albumMode === "new" && !newAlbumId && name.trim()
       ? albums.find((album) => normalizeAlbumName(album.name) === normalizeAlbumName(name))
       : null;
+  const gpsMediaItems = getGpsMediaItems(workflowAlbum);
+  const selectedMapMediaIds = workflowAlbum?.map_entry?.selected_media_ids ?? [];
+  const selectedMapMediaLabels = selectedMapMediaIds
+    .map((mediaId) => workflowAlbum?.media_items.find((item) => item.id === mediaId)?.original_filename ?? null)
+    .filter((value): value is string => Boolean(value));
 
   function clearUploadSelection() {
     const fileInput = document.getElementById("upload-input") as HTMLInputElement | null;
@@ -1683,8 +1851,39 @@ export default function Page() {
   }, [workflowAlbum, activeSuggestions]);
 
   useEffect(() => {
-    setEditableReelDraft(cloneReelDraft(activeSuggestions?.reel_draft));
-  }, [workflowAlbum?.id, activeSuggestions?.reel_draft]);
+    setEditableReelDraft(null);
+    setSelectedEditorVariantId(null);
+    setEditableMapDraft(buildMapDraftForm(workflowAlbum?.map_entry));
+    if (!workflowAlbum) {
+      setMapEntryStatus({
+        tone: "idle",
+        message: "Choose an album first. The map draft appears after media review.",
+      });
+      return;
+    }
+
+    const workflowGpsMediaItems = getGpsMediaItems(workflowAlbum);
+    if (workflowGpsMediaItems.length === 0) {
+      setMapEntryStatus({
+        tone: "idle",
+        message: "This album has no GPS-tagged media yet, so the map draft is still locked.",
+      });
+      return;
+    }
+
+    if (workflowAlbum.map_entry) {
+      setMapEntryStatus({
+        tone: "ok",
+        message: "Map draft loaded for this album. You can refine it below or rebuild it from the current media.",
+      });
+      return;
+    }
+
+    setMapEntryStatus({
+      tone: "idle",
+      message: "GPS media is available. Generate the first map draft below.",
+    });
+  }, [workflowAlbum?.id]);
 
   useEffect(() => {
     if (albumMode !== "existing" || !workflowAlbum || activeSuggestions || isAnalyzing) {
@@ -1915,6 +2114,8 @@ export default function Page() {
 
       const data = (await response.json()) as AlbumSuggestion;
       setSuggestionsByAlbum((current) => ({ ...current, [albumId]: data }));
+      setEditableReelDraft(null);
+      setSelectedEditorVariantId(null);
       setSuggestionStatus({
         tone: "ok",
         message: successMessage ?? `AI review updated for ${selectionLabel}.`,
@@ -2316,6 +2517,10 @@ export default function Page() {
 
       const updatedAlbum = (await response.json()) as Album;
       syncAlbumStateFromApi(updatedAlbum);
+      const nextSuggestion = updatedAlbum.cached_suggestion as AlbumSuggestion | undefined;
+      if (nextSuggestion?.reel_draft) {
+        setEditableReelDraft(cloneReelDraft(nextSuggestion.reel_draft));
+      }
       setSuggestionStatus({
         tone: "ok",
         message: "Reel draft edits saved. The render spec has been refreshed.",
@@ -2377,6 +2582,7 @@ export default function Page() {
 
   function handleLoadReelDraftVersion(version: ReelDraftVersion) {
     setEditableReelDraft(cloneReelDraft(version.reel_draft));
+    setSelectedEditorVariantId("__saved_version__");
     setSuggestionStatus({
       tone: "ok",
       message: `Loaded saved version "${version.label}" into the editor. Apply or render when you are ready.`,
@@ -2422,10 +2628,68 @@ export default function Page() {
 
   function handleLoadReelVariant(variant: ReelDraftVariant) {
     setEditableReelDraft(cloneReelDraft(variant.reel_draft));
+    setSelectedEditorVariantId(variant.variant_id);
     setSuggestionStatus({
       tone: "ok",
-      message: `Loaded AI variant "${variant.label}" into the editor. Re-render or save it as a version when ready.`,
+      message: `Selected AI variant "${variant.label}". The editor is now unlocked for deeper changes.`,
     });
+  }
+
+  async function handleRenderReelVariants() {
+    if (!workflowAlbum) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album first. There is no active reel variant set to compare yet.",
+      });
+      return;
+    }
+
+    if (!suggestedReelVariants.length) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Run AI review first so there are reel variants available to render.",
+      });
+      return;
+    }
+
+    if (!renderBackendAvailable) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Local reel rendering is disabled because ffmpeg is not installed on this machine yet.",
+      });
+      return;
+    }
+
+    setIsRenderingVariantSet(true);
+    setSuggestionStatus({
+      tone: "idle",
+      message: "Rendering AI reel variants for side-by-side comparison...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/rendered-variants`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not render reel variants (${response.status})`);
+      }
+
+      const updatedAlbum = (await response.json()) as Album;
+      syncAlbumStateFromApi(updatedAlbum);
+      setSuggestionStatus({
+        tone: "ok",
+        message: "AI reel variants are rendered. Choose one of them below to open the deeper editor.",
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not render the reel variants.",
+      });
+    } finally {
+      setIsRenderingVariantSet(false);
+    }
   }
 
   async function handleRenderReel() {
@@ -2475,6 +2739,10 @@ export default function Page() {
 
       const data = (await response.json()) as RenderReelResponse;
       syncAlbumStateFromApi(data.album);
+      const nextSuggestion = data.album.cached_suggestion as AlbumSuggestion | undefined;
+      if (nextSuggestion?.reel_draft) {
+        setEditableReelDraft(cloneReelDraft(nextSuggestion.reel_draft));
+      }
       setSuggestionStatus({
         tone: "ok",
         message: isReelDraftDirty
@@ -2488,6 +2756,132 @@ export default function Page() {
       });
     } finally {
       setIsRenderingReel(false);
+    }
+  }
+
+  function handleMapDraftFieldChange(
+    field: keyof MapDraftForm,
+    value: string,
+  ) {
+    setEditableMapDraft((current) => (current ? { ...current, [field]: value } : current));
+  }
+
+  async function handleGenerateMapDraft() {
+    if (!workflowAlbum) {
+      setMapEntryStatus({
+        tone: "error",
+        message: "Choose an album first. There is no active album to map yet.",
+      });
+      return;
+    }
+
+    setIsGeneratingMapEntry(true);
+    setMapEntryStatus({
+      tone: "idle",
+      message: "Building a map draft from the album GPS, labels, and AI summary...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/map-entry/auto`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not build map draft (${response.status})`);
+      }
+
+      const updatedAlbum = (await response.json()) as Album;
+      syncAlbumStateFromApi(updatedAlbum);
+      setEditableMapDraft(buildMapDraftForm(updatedAlbum.map_entry));
+      setMapEntryStatus({
+        tone: "ok",
+        message: "Map draft generated from the current album.",
+      });
+    } catch (error) {
+      setMapEntryStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not build the map draft.",
+      });
+    } finally {
+      setIsGeneratingMapEntry(false);
+    }
+  }
+
+  async function handleSaveMapDraft() {
+    if (!workflowAlbum || !editableMapDraft) {
+      setMapEntryStatus({
+        tone: "error",
+        message: "Generate a map draft first, then save any changes you want to keep.",
+      });
+      return;
+    }
+
+    const latitude = parseCoordinateValue(editableMapDraft.latitude);
+    const longitude = parseCoordinateValue(editableMapDraft.longitude);
+    if (latitude === null || longitude === null) {
+      setMapEntryStatus({
+        tone: "error",
+        message: "Latitude and longitude need valid numeric values.",
+      });
+      return;
+    }
+    if (latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) {
+      setMapEntryStatus({
+        tone: "error",
+        message: "Latitude must stay between -90 and 90, and longitude between -180 and 180.",
+      });
+      return;
+    }
+    if (!editableMapDraft.title.trim()) {
+      setMapEntryStatus({
+        tone: "error",
+        message: "Map title is required before saving.",
+      });
+      return;
+    }
+
+    setIsSavingMapEntry(true);
+    setMapEntryStatus({
+      tone: "idle",
+      message: "Saving the map draft...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/map-entry`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          title: editableMapDraft.title.trim(),
+          latitude,
+          longitude,
+          country: editableMapDraft.country.trim() || null,
+          region: editableMapDraft.region.trim() || null,
+          location_label: editableMapDraft.location_label.trim() || null,
+          icon_key: editableMapDraft.icon_key,
+          summary: editableMapDraft.summary.trim() || null,
+        }),
+      });
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not save map draft (${response.status})`);
+      }
+
+      const updatedAlbum = (await response.json()) as Album;
+      syncAlbumStateFromApi(updatedAlbum);
+      setEditableMapDraft(buildMapDraftForm(updatedAlbum.map_entry));
+      setMapEntryStatus({
+        tone: "ok",
+        message: "Map draft saved.",
+      });
+    } catch (error) {
+      setMapEntryStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not save the map draft.",
+      });
+    } finally {
+      setIsSavingMapEntry(false);
     }
   }
 
@@ -2515,6 +2909,40 @@ export default function Page() {
     document.body.appendChild(link);
     link.click();
     link.remove();
+    setSuggestionStatus({
+      tone: "ok",
+      message: "Rendered reel download started.",
+    });
+  }
+
+  function handleDownloadRenderedVariant(renderedVariant: RenderedVariant) {
+    if (!workflowAlbum) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album first. There is no compare reel to download yet.",
+      });
+      return;
+    }
+
+    const renderedVariantUrl = getRenderedVariantContentUrl(workflowAlbum, renderedVariant);
+    if (!renderedVariantUrl) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Rendered compare reel URL is not available yet.",
+      });
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.href = renderedVariantUrl;
+    link.download = `${renderedVariant.draft_name}.mp4`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setSuggestionStatus({
+      tone: "ok",
+      message: `Downloading "${renderedVariant.label}" compare reel.`,
+    });
   }
 
   function getInsightForMedia(mediaId: string): MediaInsight | null {
@@ -2531,6 +2959,18 @@ export default function Page() {
   }
 
   const renderedReelContentUrl = getRenderedReelContentUrl(workflowAlbum);
+  const selectedRenderedVariant =
+    selectedEditorVariant
+      ? renderedVariantRenders.find((item) => item.variant_id === selectedEditorVariant.variant_id) ?? null
+      : null;
+  const selectedRenderedVariantUrl = getRenderedVariantContentUrl(workflowAlbum, selectedRenderedVariant);
+  const selectedWorkspaceUsesFinalRender = Boolean(
+    selectedEditorVariant &&
+      workflowAlbum?.rendered_reel &&
+      workingReelDraft &&
+      workflowAlbum.rendered_reel.draft_name === workingReelDraft.draft_name,
+  );
+  const selectedWorkspacePreviewUrl = selectedWorkspaceUsesFinalRender ? renderedReelContentUrl : selectedRenderedVariantUrl;
 
   return (
     <main className="shell">
@@ -3222,37 +3662,257 @@ export default function Page() {
                             <strong>{suggestedReelVariants.length > 1 ? "AI reel variants" : "AI reel suggestion"}</strong>
                             <p>
                               {suggestedReelVariants.length > 1
-                                ? "Compare a few different target lengths and pacing ideas first, then load one into the editor for manual changes."
-                                : "Load the current AI reel suggestion into the editor, then fine-tune it before rendering."}
+                                ? "Render the AI variants first, compare the actual reels, then choose one to unlock manual editing."
+                                : "Render the AI reel suggestion first, then choose it to unlock manual editing."}
                             </p>
                           </div>
+                          {suggestedReelVariants.length > 0 ? (
+                            <div className="actions">
+                              <button
+                                className="button-secondary"
+                                disabled={!renderBackendAvailable || isRenderingVariantSet}
+                                onClick={() => void handleRenderReelVariants()}
+                                type="button"
+                              >
+                                {isRenderingVariantSet
+                                  ? "Rendering compare reels..."
+                                  : renderedVariantRenders.length > 0
+                                    ? "Re-render compare reels"
+                                    : "Render compare reels"}
+                              </button>
+                            </div>
+                          ) : null}
                         </div>
                         {suggestedReelVariants.length > 0 ? (
                           <div className="candidate-list">
                             {suggestedReelVariants.map((variant) => {
-                              const matchesEditor = areReelDraftsEquivalent(workingReelDraft, variant.reel_draft);
+                              const matchesEditor = selectedEditorVariantId === variant.variant_id;
+                              const renderedVariant = renderedVariantRenders.find((item) => item.variant_id === variant.variant_id);
+                              const renderedVariantUrl = getRenderedVariantContentUrl(workflowAlbum, renderedVariant ?? null);
+                              const workspacePreviewUrl = matchesEditor ? selectedWorkspacePreviewUrl : renderedVariantUrl;
                               return (
-                                <div className="candidate-row" key={variant.variant_id}>
-                                  <div>
-                                    <strong>{variant.label}</strong>
-                                    <span>
-                                      {formatDuration(variant.target_duration_seconds)} • {variant.creative_angle} •{" "}
-                                      {formatVideoStrategy(variant.reel_draft.video_strategy)}
-                                      {matchesEditor ? " • loaded in editor" : ""}
-                                    </span>
-                                    <span>
-                                      {variant.reel_draft.steps.length} beat(s) • {variant.reel_draft.title}
-                                    </span>
+                                <div className="variant-render-card" key={variant.variant_id}>
+                                  <div className="variant-render-card-header">
+                                    <div>
+                                      <strong>{variant.label}</strong>
+                                      <span>
+                                        {formatDuration(variant.target_duration_seconds)} • {variant.creative_angle} •{" "}
+                                        {formatVideoStrategy(variant.reel_draft.video_strategy)}
+                                        {matchesEditor ? " • selected for editing" : ""}
+                                      </span>
+                                      <span>
+                                        {variant.reel_draft.steps.length} beat(s) • {variant.reel_draft.title}
+                                      </span>
+                                      {matchesEditor && selectedWorkspaceUsesFinalRender && workflowAlbum?.rendered_reel ? (
+                                        <span>
+                                          Showing current reel workspace • final render ready at{" "}
+                                          {formatDate(workflowAlbum.rendered_reel.rendered_at)} •{" "}
+                                          {formatDuration(workflowAlbum.rendered_reel.estimated_total_duration_seconds)} •{" "}
+                                          {formatBytes(workflowAlbum.rendered_reel.file_size_bytes)}
+                                          {isReelDraftDirty ? " • step edits below are pending until you re-render" : ""}
+                                        </span>
+                                      ) : renderedVariant ? (
+                                        <span>
+                                          {matchesEditor ? "Showing compare reel workspace" : "Ready"} at{" "}
+                                          {formatDate(renderedVariant.rendered_at)} •{" "}
+                                          {formatDuration(renderedVariant.estimated_total_duration_seconds)} •{" "}
+                                          {formatBytes(renderedVariant.file_size_bytes)}
+                                          {matchesEditor && isReelDraftDirty ? " • step edits below are pending until you render" : ""}
+                                        </span>
+                                      ) : (
+                                        <span>Render the variants first to preview this version.</span>
+                                      )}
+                                    </div>
+                                    <div className="actions">
+                                      <button
+                                        className="button-secondary button-chip"
+                                        disabled={!renderedVariant}
+                                        onClick={() => handleLoadReelVariant(variant)}
+                                        type="button"
+                                      >
+                                        Choose this reel
+                                      </button>
+                                    </div>
                                   </div>
-                                  <div className="actions">
-                                    <button
-                                      className="button-secondary button-chip"
-                                      onClick={() => handleLoadReelVariant(variant)}
-                                      type="button"
-                                    >
-                                      Load into editor
-                                    </button>
-                                  </div>
+                                  {workspacePreviewUrl ? (
+                                    <div className="render-preview variant-render-preview">
+                                      <video
+                                        controls
+                                        preload="metadata"
+                                        src={workspacePreviewUrl}
+                                        style={matchesEditor ? { filter: buildCssFilter(workingReelDraft?.filter_settings) } : undefined}
+                                      />
+                                    </div>
+                                  ) : null}
+                                  {matchesEditor && renderedVariant && workingReelDraft ? (
+                                    <div className="render-look-panel">
+                                      <div className="reel-plan-header">
+                                        <div>
+                                          <strong>Chosen reel actions and look</strong>
+                                          <p>
+                                            This is the selected compare reel. Adjust the look here, preview it directly on the
+                                            reel above, then render the final export when you are ready.
+                                          </p>
+                                        </div>
+                                        <div className="actions">
+                                          <button
+                                            className="button-secondary button-chip"
+                                            onClick={() => handleDownloadRenderedVariant(renderedVariant)}
+                                            type="button"
+                                          >
+                                            Download compare reel
+                                          </button>
+                                          <button
+                                            className="button-secondary button-chip"
+                                            disabled={!renderBackendAvailable || isRenderingReel || isSavingReelDraft}
+                                            onClick={handleRenderReel}
+                                            type="button"
+                                          >
+                                            {isRenderingReel
+                                              ? "Rendering final reel..."
+                                              : selectedWorkspaceUsesFinalRender
+                                                ? "Re-render final reel"
+                                                : "Render final reel"}
+                                          </button>
+                                          {selectedWorkspaceUsesFinalRender ? (
+                                            <button
+                                              className="button-secondary button-chip"
+                                              onClick={handleDownloadRenderedReel}
+                                              type="button"
+                                            >
+                                              Download final reel
+                                            </button>
+                                          ) : null}
+                                          <button
+                                            className="button-secondary button-chip"
+                                            onClick={() =>
+                                              setEditableReelDraft((current) =>
+                                                current
+                                                  ? {
+                                                      ...current,
+                                                      filter_settings: {
+                                                        brightness: 0,
+                                                        contrast: 1.2,
+                                                        saturation: 1.2,
+                                                      },
+                                                    }
+                                                  : current,
+                                              )
+                                            }
+                                            type="button"
+                                          >
+                                            Auto filter
+                                          </button>
+                                          <button
+                                            className="button-secondary button-chip"
+                                            onClick={() =>
+                                              setEditableReelDraft((current) =>
+                                                current
+                                                  ? {
+                                                      ...current,
+                                                      filter_settings: {
+                                                        brightness: 0,
+                                                        contrast: 1,
+                                                        saturation: 1,
+                                                      },
+                                                    }
+                                                  : current,
+                                              )
+                                            }
+                                            type="button"
+                                          >
+                                            Clear look
+                                          </button>
+                                        </div>
+                                      </div>
+                                      <div className="filter-grid">
+                                        <label className="draft-field draft-field-slider">
+                                          <span>
+                                            Brightness
+                                            <em>{normalizeFilterSettings(workingReelDraft.filter_settings).brightness.toFixed(1)}</em>
+                                          </span>
+                                          <input
+                                            className="draft-slider"
+                                            max="0.3"
+                                            min="-0.3"
+                                            onChange={(event) =>
+                                              setEditableReelDraft((current) =>
+                                                current
+                                                  ? {
+                                                      ...current,
+                                                      filter_settings: {
+                                                        ...normalizeFilterSettings(current.filter_settings),
+                                                        brightness: roundToTenth(Number(event.target.value)),
+                                                      },
+                                                    }
+                                                  : current,
+                                              )
+                                            }
+                                            step="0.1"
+                                            type="range"
+                                            value={normalizeFilterSettings(workingReelDraft.filter_settings).brightness}
+                                          />
+                                        </label>
+                                        <label className="draft-field draft-field-slider">
+                                          <span>
+                                            Contrast
+                                            <em>{normalizeFilterSettings(workingReelDraft.filter_settings).contrast.toFixed(1)}</em>
+                                          </span>
+                                          <input
+                                            className="draft-slider"
+                                            max="1.8"
+                                            min="0.5"
+                                            onChange={(event) =>
+                                              setEditableReelDraft((current) =>
+                                                current
+                                                  ? {
+                                                      ...current,
+                                                      filter_settings: {
+                                                        ...normalizeFilterSettings(current.filter_settings),
+                                                        contrast: roundToTenth(Number(event.target.value)),
+                                                      },
+                                                    }
+                                                  : current,
+                                              )
+                                            }
+                                            step="0.1"
+                                            type="range"
+                                            value={normalizeFilterSettings(workingReelDraft.filter_settings).contrast}
+                                          />
+                                        </label>
+                                        <label className="draft-field draft-field-slider">
+                                          <span>
+                                            Saturation
+                                            <em>{normalizeFilterSettings(workingReelDraft.filter_settings).saturation.toFixed(1)}</em>
+                                          </span>
+                                          <input
+                                            className="draft-slider"
+                                            max="2"
+                                            min="0"
+                                            onChange={(event) =>
+                                              setEditableReelDraft((current) =>
+                                                current
+                                                  ? {
+                                                      ...current,
+                                                      filter_settings: {
+                                                        ...normalizeFilterSettings(current.filter_settings),
+                                                        saturation: roundToTenth(Number(event.target.value)),
+                                                      },
+                                                    }
+                                                  : current,
+                                              )
+                                            }
+                                            step="0.1"
+                                            type="range"
+                                            value={normalizeFilterSettings(workingReelDraft.filter_settings).saturation}
+                                          />
+                                        </label>
+                                      </div>
+                                      <p className="draft-filter-note">
+                                        Current look: {formatFilterSettings(workingReelDraft.filter_settings)}
+                                      </p>
+                                    </div>
+                                  ) : null}
                                 </div>
                               );
                             })}
@@ -3268,8 +3928,13 @@ export default function Page() {
                             <p>
                               {workingReelDraft
                                 ? `${workingReelDraft.output_width}x${workingReelDraft.output_height} • ${workingReelDraft.fps} fps • ${workingReelDraft.assets.length} asset(s) • ${formatVideoStrategy(workingReelDraft.video_strategy)}`
-                                : "A downloadable reel draft manifest appears here after the AI review runs."}
+                                : suggestedReelVariants.length > 0
+                                  ? "Pick one rendered compare reel above to unlock the detailed editor, final render, filters, and export actions."
+                                  : "A downloadable reel draft manifest appears here after the AI review runs."}
                             </p>
+                            {selectedEditorVariant ? (
+                              <p>Editing the chosen reel above. Step changes below will affect that same reel workspace.</p>
+                            ) : null}
                           </div>
                           {workingReelDraft ? (
                             <div className="actions">
@@ -3305,25 +3970,27 @@ export default function Page() {
                               >
                                 Reset edits
                               </button>
-                              <button
-                                className="button-secondary"
-                                disabled={!renderBackendAvailable || isRenderingReel || isSavingReelDraft}
-                                onClick={handleRenderReel}
-                                title={
-                                  renderBackendAvailable
-                                    ? "Render the current reel draft locally."
-                                    : "Install ffmpeg locally to enable reel rendering."
-                                }
-                                type="button"
-                              >
-                                {isRenderingReel
-                                  ? "Rendering..."
-                                  : !renderBackendAvailable
-                                    ? "ffmpeg required"
-                                  : workflowAlbum?.rendered_reel
-                                    ? "Re-render reel"
-                                    : "Render reel"}
-                              </button>
+                              {!selectedEditorVariant ? (
+                                <button
+                                  className="button-secondary"
+                                  disabled={!renderBackendAvailable || isRenderingReel || isSavingReelDraft}
+                                  onClick={handleRenderReel}
+                                  title={
+                                    renderBackendAvailable
+                                      ? "Render the current reel draft locally."
+                                      : "Install ffmpeg locally to enable reel rendering."
+                                  }
+                                  type="button"
+                                >
+                                  {isRenderingReel
+                                    ? "Rendering..."
+                                    : !renderBackendAvailable
+                                      ? "ffmpeg required"
+                                    : workflowAlbum?.rendered_reel
+                                      ? "Re-render reel"
+                                      : "Render reel"}
+                                </button>
+                              ) : null}
                               <button className="button-primary" onClick={handleDownloadReelDraft} type="button">
                                 Download draft JSON
                               </button>
@@ -3803,7 +4470,7 @@ export default function Page() {
                                 </details>
                               </div>
                             ) : null}
-                            {workflowAlbum?.rendered_reel ? (
+                            {workflowAlbum?.rendered_reel && !selectedEditorVariant ? (
                               <div className="ai-card ai-card-wide">
                                 <div className="reel-plan-header">
                                   <div>
@@ -3828,6 +4495,7 @@ export default function Page() {
                                       controls
                                       preload="metadata"
                                       src={renderedReelContentUrl}
+                                      style={{ filter: buildCssFilter(workingReelDraft?.filter_settings) }}
                                     />
                                   ) : null}
                                 </div>
@@ -3838,6 +4506,14 @@ export default function Page() {
                                 </p>
                               </div>
                             ) : null}
+                          </div>
+                        ) : suggestedReelVariants.length > 0 ? (
+                          <div className="ai-inline-note">
+                            <strong>Editor locked until you choose one rendered reel</strong>
+                            <span>
+                              Render the compare reels above, preview them, then click `Choose this reel` to unlock step
+                              trimming, image framing, timing edits, re-render, final look controls, and downloads.
+                            </span>
                           </div>
                         ) : (
                           <p>No reel draft available yet.</p>
@@ -3865,6 +4541,194 @@ export default function Page() {
                       </div>
                     </div>
                   ) : null}
+                </div>
+              </div>
+
+              <div className="ai-panel">
+                <div className="review-header">
+                  <div>
+                    <p className="eyebrow">Step 5</p>
+                    <h2>Map draft</h2>
+                  </div>
+                  <div className="review-meta">{gpsMediaItems.length} GPS item(s) detected</div>
+                </div>
+
+                <div className="form-grid">
+                  <div className="context-note">
+                    <strong>Album to map</strong>
+                    <p>
+                      This first pass turns album GPS points plus the current AI read into one saved location draft.
+                      Later, this becomes the source for the public travel map.
+                    </p>
+                  </div>
+
+                  <div
+                    className={`status ${
+                      mapEntryStatus.tone === "error" ? "error" : mapEntryStatus.tone === "ok" ? "ok" : ""
+                    }`}
+                  >
+                    {mapEntryStatus.message}
+                  </div>
+
+                  <div className="actions">
+                    <button
+                      className="button-primary"
+                      disabled={isGeneratingMapEntry || gpsMediaItems.length === 0}
+                      onClick={() => void handleGenerateMapDraft()}
+                      type="button"
+                    >
+                      {isGeneratingMapEntry
+                        ? "Building map draft..."
+                        : workflowAlbum.map_entry
+                          ? "Refresh map draft from album"
+                          : "Generate map draft from album"}
+                    </button>
+                    <button
+                      className="button-secondary"
+                      disabled={!editableMapDraft || isSavingMapEntry}
+                      onClick={() => void handleSaveMapDraft()}
+                      type="button"
+                    >
+                      {isSavingMapEntry ? "Saving..." : "Save map draft"}
+                    </button>
+                    {getOpenStreetMapUrl(editableMapDraft) ? (
+                      <a
+                        className="button-secondary"
+                        href={getOpenStreetMapUrl(editableMapDraft) ?? undefined}
+                        rel="noreferrer"
+                        target="_blank"
+                      >
+                        Open in OpenStreetMap
+                      </a>
+                    ) : null}
+                  </div>
+
+                  {editableMapDraft ? (
+                    <>
+                      <div className="reel-draft-grid">
+                        <label className="field">
+                          <span className="label-row">
+                            <strong>Map title</strong>
+                            <span className="hint">Required</span>
+                          </span>
+                          <input
+                            className="input"
+                            onChange={(event) => handleMapDraftFieldChange("title", event.target.value)}
+                            value={editableMapDraft.title}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="label-row">
+                            <strong>Icon</strong>
+                            <span className="hint">First-pass marker type</span>
+                          </span>
+                          <select
+                            className="input"
+                            onChange={(event) => handleMapDraftFieldChange("icon_key", event.target.value)}
+                            value={editableMapDraft.icon_key}
+                          >
+                            {MAP_ICON_OPTIONS.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="field">
+                          <span className="label-row">
+                            <strong>Latitude</strong>
+                            <span className="hint">Editable</span>
+                          </span>
+                          <input
+                            className="input"
+                            inputMode="decimal"
+                            onChange={(event) => handleMapDraftFieldChange("latitude", event.target.value)}
+                            value={editableMapDraft.latitude}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="label-row">
+                            <strong>Longitude</strong>
+                            <span className="hint">Editable</span>
+                          </span>
+                          <input
+                            className="input"
+                            inputMode="decimal"
+                            onChange={(event) => handleMapDraftFieldChange("longitude", event.target.value)}
+                            value={editableMapDraft.longitude}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="label-row">
+                            <strong>Country</strong>
+                            <span className="hint">Optional</span>
+                          </span>
+                          <input
+                            className="input"
+                            onChange={(event) => handleMapDraftFieldChange("country", event.target.value)}
+                            value={editableMapDraft.country}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="label-row">
+                            <strong>Region</strong>
+                            <span className="hint">Optional</span>
+                          </span>
+                          <input
+                            className="input"
+                            onChange={(event) => handleMapDraftFieldChange("region", event.target.value)}
+                            value={editableMapDraft.region}
+                          />
+                        </label>
+                        <label className="field">
+                          <span className="label-row">
+                            <strong>Location label</strong>
+                            <span className="hint">Optional</span>
+                          </span>
+                          <input
+                            className="input"
+                            onChange={(event) => handleMapDraftFieldChange("location_label", event.target.value)}
+                            value={editableMapDraft.location_label}
+                          />
+                        </label>
+                        <div className="selected-album-card">
+                          <strong>GPS coverage</strong>
+                          <span>
+                            {workflowAlbum.map_entry?.gps_point_count ?? gpsMediaItems.length} point(s) contribute to this draft.
+                          </span>
+                          {selectedMapMediaLabels.length > 0 ? (
+                            <div className="tag-row">
+                              {selectedMapMediaLabels.map((label) => (
+                                <span className="tag" key={`map-media-${label}`}>
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+
+                      <label className="field">
+                        <span className="label-row">
+                          <strong>Map summary</strong>
+                          <span className="hint">Optional note for the future public map</span>
+                        </span>
+                        <textarea
+                          className="textarea"
+                          onChange={(event) => handleMapDraftFieldChange("summary", event.target.value)}
+                          placeholder="Quick context for why this stop matters on the travel map."
+                          value={editableMapDraft.summary}
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <div className="selected-album-card">
+                      <strong>No saved map draft yet</strong>
+                      <span>
+                        Generate the first draft from album GPS and the AI summary, then fine-tune it here before the later map page exists.
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
+from copy import deepcopy
 
 from fastapi import APIRouter, Body, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 
 from services.api.app.core.album_suggestions import AlbumSuggestionService
 from services.api.app.core.file_repository import FileRepository
+from services.api.app.core.map_entries import build_auto_map_entry, merge_map_entry
 from services.api.app.core.media_metadata import build_media_metadata, enrich_saved_media_metadata
 from services.api.app.core.reel_renderer import ReelRenderError, ReelRenderer
 from services.api.app.models.albums import (
@@ -16,6 +19,7 @@ from services.api.app.models.albums import (
     UploadAnalysisFramesRequest,
     CreateAlbumRequest,
     GenerateAlbumDescriptionResponse,
+    UpdateMapEntryRequest,
     RenderReelResponse,
     SaveReelDraftVersionRequest,
     UpdateReelDraftRequest,
@@ -64,6 +68,44 @@ def update_album(album_id: str, request: UpdateAlbumRequest) -> dict:
     if album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
     return album
+
+
+@router.post("/{album_id}/map-entry/auto", response_model=AlbumResponse)
+def generate_album_map_entry(album_id: str) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    try:
+        map_entry = build_auto_map_entry(album, album.get("map_entry"))
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    updated_album = repository.save_map_entry(album_id, map_entry)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
+
+
+@router.patch("/{album_id}/map-entry", response_model=AlbumResponse)
+def update_album_map_entry(album_id: str, request: UpdateMapEntryRequest) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    try:
+        map_entry = merge_map_entry(
+            album,
+            existing_entry=album.get("map_entry"),
+            updates=request.model_dump(exclude_unset=True),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    updated_album = repository.save_map_entry(album_id, map_entry)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
 
 
 @router.get("/{album_id}", response_model=AlbumResponse)
@@ -135,6 +177,62 @@ def get_rendered_reel_content(album_id: str) -> FileResponse:
     response = FileResponse(
         path=output_path,
         media_type=rendered_reel.get("content_type") or "video/mp4",
+        filename=output_path.name,
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
+
+
+@router.get("/{album_id}/rendered-variants/{variant_id}/content")
+def get_rendered_variant_content(album_id: str, variant_id: str) -> FileResponse:
+    album = repository.get_album(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    cached_suggestion = album.get("cached_suggestion")
+    if not isinstance(cached_suggestion, dict):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered variant not found.")
+
+    rendered_variant_renders = cached_suggestion.get("rendered_variant_renders")
+    if not isinstance(rendered_variant_renders, list):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered variant not found.")
+
+    rendered_variant = next(
+        (
+            item
+            for item in rendered_variant_renders
+            if isinstance(item, dict) and str(item.get("variant_id") or "").strip() == variant_id
+        ),
+        None,
+    )
+    if not isinstance(rendered_variant, dict):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered variant not found.")
+
+    relative_path = str(rendered_variant.get("relative_path") or "").strip()
+    if not relative_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered variant not found.")
+
+    output_path = repository.resolve_relative_path(relative_path)
+    if not output_path.exists():
+        logger.warning(
+            "Rendered reel variant missing on disk album_id=%s variant_id=%s relative_path=%s",
+            album_id,
+            variant_id,
+            relative_path,
+        )
+        updated_renders = [
+            item
+            for item in rendered_variant_renders
+            if not (isinstance(item, dict) and str(item.get("variant_id") or "").strip() == variant_id)
+        ]
+        repository.save_rendered_variant_renders(album_id, updated_renders)
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered variant file not found.")
+
+    response = FileResponse(
+        path=output_path,
+        media_type=rendered_variant.get("content_type") or "video/mp4",
         filename=output_path.name,
     )
     response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
@@ -327,6 +425,57 @@ def render_album_reel(album_id: str, request: UpdateReelDraftRequest | None = Bo
     }
 
 
+@router.post("/{album_id}/rendered-variants", response_model=AlbumResponse)
+def render_album_reel_variants(album_id: str) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
+    reel_draft_variants = cached_suggestion.get("reel_draft_variants")
+    if not isinstance(reel_draft_variants, list) or not reel_draft_variants:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No AI reel variants are available to render.")
+
+    rendered_variants: list[dict] = []
+    for variant in reel_draft_variants:
+        if not isinstance(variant, dict):
+            continue
+
+        reel_draft = variant.get("reel_draft")
+        if not isinstance(reel_draft, dict):
+            continue
+
+        variant_id = str(variant.get("variant_id") or "").strip() or f"variant-{len(rendered_variants) + 1}"
+        unique_draft = deepcopy(reel_draft)
+        unique_draft["draft_name"] = _build_variant_render_draft_name(album, variant_id)
+        prepared_draft = suggestion_service.rebuild_reel_draft(
+            album,
+            _build_reel_draft_edit_payload(unique_draft),
+            existing_draft=unique_draft,
+        )
+
+        try:
+            rendered_reel = reel_renderer.render_draft(prepared_draft)
+        except ReelRenderError as exc:
+            logger.warning("Render reel variant failed album_id=%s variant_id=%s reason=%s", album_id, variant_id, str(exc))
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+        rendered_variants.append(
+            {
+                "variant_id": variant_id,
+                "label": str(variant.get("label") or variant_id),
+                "creative_angle": str(variant.get("creative_angle") or ""),
+                "target_duration_seconds": float(variant.get("target_duration_seconds") or 0.0),
+                **rendered_reel,
+            }
+        )
+
+    updated_album = repository.save_rendered_variant_renders(album_id, rendered_variants)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
+
+
 @router.post("/{album_id}/description/auto", response_model=GenerateAlbumDescriptionResponse)
 def generate_album_description(album_id: str) -> dict:
     album = repository.refresh_album_media_metadata(album_id)
@@ -441,3 +590,36 @@ def _get_renderable_cached_suggestion(album_id: str, album: dict) -> dict:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This album does not have a renderable reel draft yet.")
 
     return cached_suggestion
+
+
+def _build_reel_draft_edit_payload(reel_draft: dict) -> dict:
+    return {
+        "title": reel_draft.get("title"),
+        "caption": reel_draft.get("caption"),
+        "cover_media_id": reel_draft.get("cover_media_id"),
+        "audio_strategy": reel_draft.get("audio_strategy"),
+        "filter_settings": reel_draft.get("filter_settings"),
+        "steps": [
+            {
+                "role": step.get("role"),
+                "media_id": step.get("media_id"),
+                "source_role": step.get("source_role"),
+                "suggested_duration_seconds": step.get("suggested_duration_seconds"),
+                "clip_start_seconds": step.get("clip_start_seconds"),
+                "clip_end_seconds": step.get("clip_end_seconds"),
+                "frame_mode": step.get("frame_mode"),
+                "focus_x_percent": step.get("focus_x_percent"),
+                "focus_y_percent": step.get("focus_y_percent"),
+                "edit_instruction": step.get("edit_instruction"),
+                "why": step.get("why"),
+            }
+            for step in reel_draft.get("steps") or []
+            if isinstance(step, dict)
+        ],
+    }
+
+
+def _build_variant_render_draft_name(album: dict, variant_id: str) -> str:
+    album_slug = re.sub(r"[^a-z0-9]+", "-", str(album.get("name") or "album").lower()).strip("-") or "album"
+    variant_slug = re.sub(r"[^a-z0-9]+", "-", variant_id.lower()).strip("-") or "variant"
+    return f"{album_slug}-{variant_slug}-compare"

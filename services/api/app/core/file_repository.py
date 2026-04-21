@@ -46,6 +46,7 @@ class FileRepository:
             "description": description,
             "description_meta": None,
             "cached_suggestion": None,
+            "map_entry": None,
             "rendered_reel": None,
             "created_at": _utc_now(),
             "updated_at": _utc_now(),
@@ -115,8 +116,48 @@ class FileRepository:
         if album is None:
             return None
 
+        current_cached_suggestion = album.get("cached_suggestion")
+        current_rendered_variants = []
+        if isinstance(current_cached_suggestion, dict):
+            current_rendered_variants = current_cached_suggestion.get("rendered_variant_renders") or []
+        next_rendered_variants = cached_suggestion.get("rendered_variant_renders") if isinstance(cached_suggestion, dict) else []
+        if current_rendered_variants and not next_rendered_variants:
+            self._clear_rendered_variant_files(album)
         if invalidate_rendered_reel:
             self._clear_rendered_reel_files(album)
+        album["cached_suggestion"] = cached_suggestion
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def save_map_entry(self, album_id: str, map_entry: dict[str, Any] | None) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        album["map_entry"] = self._normalize_map_entry(map_entry)
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def save_rendered_variant_renders(
+        self,
+        album_id: str,
+        rendered_variant_renders: list[dict[str, Any]] | None,
+    ) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        cached_suggestion = album.get("cached_suggestion")
+        if not isinstance(cached_suggestion, dict):
+            return None
+
+        self._clear_rendered_variant_files(album)
+        if rendered_variant_renders:
+            cached_suggestion["rendered_variant_renders"] = rendered_variant_renders
+        else:
+            cached_suggestion.pop("rendered_variant_renders", None)
         album["cached_suggestion"] = cached_suggestion
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
@@ -332,6 +373,14 @@ class FileRepository:
     def _album_file(self, album_id: str) -> Path:
         return self._album_dir(album_id) / "album.json"
 
+    def list_map_entries(self) -> list[dict[str, Any]]:
+        map_entries: list[dict[str, Any]] = []
+        for album in self.list_albums():
+            map_entry = album.get("map_entry")
+            if isinstance(map_entry, dict):
+                map_entries.append(map_entry)
+        return map_entries
+
     def _read_album_file(self, album_dir: Path) -> dict[str, Any] | None:
         album_file = album_dir / "album.json"
         if not album_file.exists():
@@ -377,6 +426,7 @@ class FileRepository:
             "description": album.get("description"),
             "description_meta": album.get("description_meta"),
             "cached_suggestion": album.get("cached_suggestion"),
+            "map_entry": self._normalize_map_entry(album.get("map_entry")),
             "rendered_reel": album.get("rendered_reel"),
             "created_at": album.get("created_at", _utc_now()),
             "updated_at": album.get("updated_at", album.get("created_at", _utc_now())),
@@ -411,6 +461,47 @@ class FileRepository:
             "detected_at": _utc_now(),
         }
         return {**defaults, **media_item}
+
+    @staticmethod
+    def _normalize_map_entry(map_entry: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(map_entry, dict):
+            return None
+
+        latitude = map_entry.get("latitude")
+        longitude = map_entry.get("longitude")
+        if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+            return None
+
+        title = str(map_entry.get("title") or "").strip()
+        icon_key = str(map_entry.get("icon_key") or "").strip()
+        album_id = str(map_entry.get("album_id") or "").strip()
+        album_name = str(map_entry.get("album_name") or "").strip()
+        if not title or not icon_key or not album_id or not album_name:
+            return None
+
+        selected_media_ids = [
+            str(media_id).strip()
+            for media_id in map_entry.get("selected_media_ids") or []
+            if str(media_id).strip()
+        ][:8]
+
+        return {
+            "album_id": album_id,
+            "album_name": album_name,
+            "title": title,
+            "latitude": float(latitude),
+            "longitude": float(longitude),
+            "country": str(map_entry.get("country") or "").strip() or None,
+            "region": str(map_entry.get("region") or "").strip() or None,
+            "location_label": str(map_entry.get("location_label") or "").strip() or None,
+            "icon_key": icon_key,
+            "summary": str(map_entry.get("summary") or "").strip() or None,
+            "selected_media_ids": selected_media_ids,
+            "gps_point_count": int(map_entry.get("gps_point_count") or 0),
+            "source": str(map_entry.get("source") or "album_auto").strip() or "album_auto",
+            "created_at": map_entry.get("created_at", _utc_now()),
+            "updated_at": map_entry.get("updated_at", map_entry.get("created_at", _utc_now())),
+        }
 
     @staticmethod
     def _needs_media_refresh(media_item: dict[str, Any]) -> bool:
@@ -459,7 +550,33 @@ class FileRepository:
 
         album["rendered_reel"] = None
 
+    def _clear_rendered_variant_files(self, album: dict[str, Any]) -> None:
+        cached_suggestion = album.get("cached_suggestion")
+        if not isinstance(cached_suggestion, dict):
+            return
+
+        rendered_variant_renders = cached_suggestion.get("rendered_variant_renders")
+        if not isinstance(rendered_variant_renders, list):
+            cached_suggestion.pop("rendered_variant_renders", None)
+            album["cached_suggestion"] = cached_suggestion
+            return
+
+        for rendered_variant in rendered_variant_renders:
+            if not isinstance(rendered_variant, dict):
+                continue
+            relative_path = str(rendered_variant.get("relative_path") or "").strip()
+            if not relative_path:
+                continue
+            render_path = self.resolve_relative_path(relative_path)
+            render_dir = render_path.parent
+            if render_dir.exists() and self.storage_root == render_dir.parent.parent:
+                shutil.rmtree(render_dir, ignore_errors=True)
+
+        cached_suggestion.pop("rendered_variant_renders", None)
+        album["cached_suggestion"] = cached_suggestion
+
     def _invalidate_cached_ai(self, album: dict[str, Any], *, clear_description_meta: bool) -> None:
+        self._clear_rendered_variant_files(album)
         album["cached_suggestion"] = None
         self._clear_rendered_reel_files(album)
         if clear_description_meta:

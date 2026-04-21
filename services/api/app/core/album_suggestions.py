@@ -1312,6 +1312,13 @@ class AlbumSuggestionService:
             if isinstance(existing_draft, dict)
             else None
         )
+        filter_settings = self._normalize_filter_settings(
+            edited_draft.get("filter_settings")
+            if isinstance(edited_draft, dict) and edited_draft.get("filter_settings") is not None
+            else existing_draft.get("filter_settings")
+            if isinstance(existing_draft, dict)
+            else None
+        )
 
         reel_draft = {
             "draft_name": draft_name,
@@ -1324,6 +1331,7 @@ class AlbumSuggestionService:
             "output_height": 1920,
             "fps": 30,
             "audio_strategy": audio_strategy,
+            "filter_settings": filter_settings,
             "steps": draft_steps,
             "assets": assets,
         }
@@ -1336,6 +1344,24 @@ class AlbumSuggestionService:
         if normalized in {"mute_all_audio", "mute", "remove_audio", "silent"}:
             return "mute_all_audio"
         return "preserve_source_audio"
+
+    @staticmethod
+    def _normalize_filter_settings(value: Any) -> dict[str, float]:
+        if not isinstance(value, dict):
+            value = {}
+
+        def _coerce(raw: Any, default: float, minimum: float, maximum: float) -> float:
+            try:
+                numeric = float(raw)
+            except (TypeError, ValueError):
+                numeric = default
+            return round(min(maximum, max(minimum, numeric)), 2)
+
+        return {
+            "brightness": _coerce(value.get("brightness"), 0.0, -0.3, 0.3),
+            "contrast": _coerce(value.get("contrast"), 1.0, 0.5, 1.8),
+            "saturation": _coerce(value.get("saturation"), 1.0, 0.0, 2.0),
+        }
 
     @staticmethod
     def _normalize_frame_mode(value: Any) -> str:
@@ -1778,6 +1804,7 @@ class AlbumSuggestionService:
             "output_height": 1920,
             "fps": 30,
             "audio_strategy": "preserve_source_audio",
+            "filter_settings": self._normalize_filter_settings(None),
             "steps": draft_steps,
             "assets": assets,
         }
@@ -1886,6 +1913,7 @@ class AlbumSuggestionService:
     def _build_reel_render_spec(self, reel_draft: dict[str, Any]) -> dict[str, Any]:
         backend_available = shutil.which("ffmpeg") is not None
         audio_strategy = self._normalize_audio_strategy(reel_draft.get("audio_strategy"))
+        filter_settings = self._normalize_filter_settings(reel_draft.get("filter_settings"))
         render_dir = f"renders/{reel_draft['draft_name']}"
         concat_relative_path = f"{render_dir}/concat.txt"
         output_relative_path = f"{render_dir}/{reel_draft['draft_name']}.mp4"
@@ -1927,6 +1955,7 @@ class AlbumSuggestionService:
                     "focus_y_percent": focus_y_percent,
                     "output_duration_seconds": output_duration_seconds,
                     "audio_strategy": audio_strategy,
+                    "filter_settings": filter_settings,
                 }
             )
 
@@ -1943,6 +1972,7 @@ class AlbumSuggestionService:
                     focus_x_percent=focus_x_percent,
                     focus_y_percent=focus_y_percent,
                     audio_strategy=audio_strategy,
+                    filter_settings=filter_settings,
                 )
             )
             concat_entries.append(f"file '{Path(output_relative).name}'")
@@ -1967,6 +1997,10 @@ class AlbumSuggestionService:
             notes.append("All beats are rendered with silent filler audio, even when the source videos include sound.")
         else:
             notes.append("Video beats can preserve source audio when it exists; still-image beats use silent filler audio.")
+        if any(abs(float(filter_settings[key]) - baseline) > 0.001 for key, baseline in (("brightness", 0.0), ("contrast", 1.0), ("saturation", 1.0))):
+            notes.append(
+                f"Reel-wide look applied: brightness {filter_settings['brightness']:+.2f}, contrast {filter_settings['contrast']:.2f}, saturation {filter_settings['saturation']:.2f}."
+            )
         notes.append("A richer soundtrack and audio-mixing layer has not been implemented yet.")
         if not backend_available:
             notes.append("ffmpeg is not installed on this machine right now, so these commands are generated but not executed locally.")
@@ -1996,12 +2030,14 @@ class AlbumSuggestionService:
         focus_x_percent: float | None,
         focus_y_percent: float | None,
         audio_strategy: str,
+        filter_settings: dict[str, float],
     ) -> str:
         if media_kind == "video":
-            vf_chain = (
+            vf_chain = self._apply_reel_filter_settings_to_vf_chain(
                 "scale=1080:1920:force_original_aspect_ratio=decrease,"
                 "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
-                "fps=30"
+                "fps=30",
+                filter_settings=filter_settings,
             )
             timing_prefix = ""
             if clip_start_seconds is not None:
@@ -2031,6 +2067,7 @@ class AlbumSuggestionService:
             frame_mode=frame_mode,
             focus_x_percent=focus_x_percent,
             focus_y_percent=focus_y_percent,
+            filter_settings=filter_settings,
         )
         return (
             "ffmpeg -y "
@@ -2048,22 +2085,34 @@ class AlbumSuggestionService:
         frame_mode: str | None,
         focus_x_percent: float | None,
         focus_y_percent: float | None,
+        filter_settings: dict[str, float],
     ) -> str:
         normalized_frame_mode = self._normalize_frame_mode(frame_mode)
         if normalized_frame_mode != "cover":
-            return (
+            return self._apply_reel_filter_settings_to_vf_chain(
                 "scale=1080:1920:force_original_aspect_ratio=decrease,"
                 "pad=1080:1920:(ow-iw)/2:(oh-ih)/2,"
-                "fps=30"
+                "fps=30",
+                filter_settings=filter_settings,
             )
 
         x_ratio = self._normalize_focus_percent(focus_x_percent) / 100
         y_ratio = self._normalize_focus_percent(focus_y_percent) / 100
-        return (
+        return self._apply_reel_filter_settings_to_vf_chain(
             "scale=1080:1920:force_original_aspect_ratio=increase,"
             f"crop=1080:1920:(iw-1080)*{x_ratio:.3f}:(ih-1920)*{y_ratio:.3f},"
-            "fps=30"
+            "fps=30",
+            filter_settings=filter_settings,
         )
+
+    @staticmethod
+    def _apply_reel_filter_settings_to_vf_chain(base_chain: str, *, filter_settings: dict[str, float]) -> str:
+        brightness = round(float(filter_settings.get("brightness", 0.0)), 2)
+        contrast = round(float(filter_settings.get("contrast", 1.0)), 2)
+        saturation = round(float(filter_settings.get("saturation", 1.0)), 2)
+        if abs(brightness) <= 0.001 and abs(contrast - 1.0) <= 0.001 and abs(saturation - 1.0) <= 0.001:
+            return base_chain
+        return f"{base_chain},eq=brightness={brightness:.2f}:contrast={contrast:.2f}:saturation={saturation:.2f}"
 
     @staticmethod
     def _shell_quote(value: str) -> str:

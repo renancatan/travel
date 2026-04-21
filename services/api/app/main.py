@@ -11,6 +11,7 @@ from services.api.app.core.reel_variant_presets import get_reel_variant_runtime_
 from services.api.app.core.settings import get_settings
 from services.api.app.models.api import AskRequest, AskResponse
 from services.api.app.routers.albums import router as albums_router
+from services.api.app.routers.map_entries import router as map_entries_router
 
 settings = get_settings()
 app = FastAPI(title=settings.app_name)
@@ -22,6 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(albums_router)
+app.include_router(map_entries_router)
 
 
 @app.get("/")
