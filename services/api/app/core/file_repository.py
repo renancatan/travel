@@ -520,6 +520,7 @@ class FileRepository:
             "summary": str(map_entry.get("summary") or "").strip() or None,
             "selected_media_ids": selected_media_ids,
             "selected_reel_draft_name": str(map_entry.get("selected_reel_draft_name") or "").strip() or None,
+            "selected_reel_variant_id": str(map_entry.get("selected_reel_variant_id") or "").strip() or None,
             "generation_prompt": str(map_entry.get("generation_prompt") or "").strip() or None,
             "gps_point_count": int(map_entry.get("gps_point_count") or 0),
             "source": str(map_entry.get("source") or "album_auto").strip() or "album_auto",

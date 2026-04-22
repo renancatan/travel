@@ -190,6 +190,10 @@ Implemented in `apps/web`:
   - it shows the compare reel first
   - after final render, it swaps to the current rendered output for that same draft
   - the duplicate lower rendered-reel preview is hidden for that selected-variant flow to avoid two unrelated reel surfaces
+- the `/map` page now persists the chosen compare-reel variant id into the saved map entry:
+  - selected stops can reopen with the chosen rendered compare reel as the main media
+  - older entries without that saved variant id fall back to a best-effort draft-family match
+- the `/map` Leaflet surface now forces extra relayout after load, resize, and first camera move so the page no longer depends on a manual click/reset before the basemap appears
 
 ## Current State
 
@@ -202,6 +206,9 @@ Implemented in `apps/web`:
 - local reel rendering now exports a final `.mp4` with both H.264 video and AAC audio when the draft includes video beats
 - map draft generation and save now work against real album GPS metadata
 - map draft generation is now its own AI flow and no longer depends only on GPS media
+- the live `/map` page was re-verified in headless Chrome after hydration:
+  - it no longer starts as a blank gray surface in the tested flow
+  - the selected stop now triggers rendered-variant media requests instead of only raw-media fallback requests
 
 ### Recently fixed
 
@@ -262,16 +269,20 @@ Implemented in `apps/web`:
   - `storage_path`
 - there is now a first public-style map preview page at `/map`:
   - it fetches saved albums with map entries
-  - shows owner-side filters for country, city, and group
-  - shows a stop list in the sidebar
+  - keeps owner-side filters for country, city, and group
+  - keeps a slimmer saved-stop rail on the left
+  - restores a larger, more dominant map stage so the user is already "inside the map view"
+  - uses a cleaner light basemap instead of the busier default OSM look
   - renders a real interactive Leaflet marker map instead of only a raw OSM handoff
-  - clicking a marker now focuses that stop and updates the richer stop explorer
-  - renders a richer stop card with icon, summary, canonical path, GPS link, and selected media preview
-  - this now carries more of the legacy-map feel than the raw OpenStreetMap pin alone
+  - uses de-collided display positions for exact / near-identical stop coordinates so markers do not stack directly on top of each other
+  - clicking a marker focuses that stop and updates one floating place card tied to the map itself
+  - clicking empty map space, or using `Unselect`, clears the current focused place
+  - the selected place card now lives inside the map surface and shows icon, summary, GPS link, and chosen media with videos first and images after them
   - but the real legacy target interaction is still richer:
     - custom category icons directly on the interactive map
     - clicking a place opens an expanded modal/card
     - that expanded place view shows images and videos inline
+    - the next step is to make the selected-place experience feel more like a real media expansion than only a stronger floating info card
     - this behavior lives in the archived reference files:
       - [legacy/travel-v0/public/js/map.js](/home/renancatan/renan/projects/travel/legacy/travel-v0/public/js/map.js)
       - [legacy/travel-v0/public/index.html](/home/renancatan/renan/projects/travel/legacy/travel-v0/public/index.html)
@@ -334,7 +345,8 @@ Implemented in `apps/web`:
   - later public map work should still add:
     - image/reel overlays directly on the interactive map layer
     - legacy-style clickable category icons that open a media-rich place modal/card
-    - the next interaction step should likely move from the current selected-stop spotlight into a fuller modal/card expansion directly on marker click
+    - the current floating place card is better than the previous split layout, but it is still a first pass
+    - the next interaction step should move even closer to a true modal/card expansion directly on marker click
 - AI now generates first-pass reel variants at different target lengths:
   - `Quick 10s`
   - `Story 15s`
@@ -410,6 +422,7 @@ Implemented in `apps/web`:
    - stronger country/city/group filters
    - later personal score/rating filters for the user's own places
    - keep the mental model as "my travel memory explorer," not "public place reviews"
+18. The `/map` page now prefers the chosen reel preview or final rendered reel over raw source clips when one is available, and it forces an initial Leaflet relayout to avoid the blank white first paint.
 
 ## Working Rules For Future Changes
 

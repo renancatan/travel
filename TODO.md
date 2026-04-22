@@ -168,6 +168,8 @@
     - `user/travel/country/state/city/place-group/trip-slug/...`
   - make sure normalized place slugs can safely drive those paths
   - keep storage layout separate from UI labels so we can rename display text without breaking object organization
+  - remove mixed raw-label path previews such as `PETARtravel/` from the user-facing map flow
+  - keep user-facing path previews ASCII-safe and slug-based by default
 - [ ] Expand map stop presentation beyond a plain pin:
   - attach the chosen group icon automatically
   - attach selected images and/or the chosen reel preview to the map stop
@@ -177,6 +179,21 @@
     - clickable markers
     - expanding place modal/card with images and videos inside it
     - richer stop exploration directly from the map, not only from a side list
+- [ ] Keep pushing `/map` away from dashboard feel and closer to true map-first exploration:
+  - the latest version is better, but still not yet at the desired "already inside the map" experience
+  - make the selected stop feel more like a true place expansion
+  - prefer final reel first, then the source media used to build it
+  - likely separate the selected-stop media into clearer sections or tabs:
+    - chosen/final reel
+    - source videos and images
+  - keep filters light and useful without letting the map get boxed in again
+  - optionally expose the chosen compare-reel preview on the map even before a final reel export exists, if we want map cards to mirror the editor selection even more closely
+  - keep testing first-load behavior so the basemap never appears as a blank/white surface before the first interaction
+  - keep selected compare-reel reopening deterministic for older saved map entries that were created before `selected_reel_variant_id` was stored
+- [ ] Explore stronger geographic emphasis later, but only when the data is real enough:
+  - country/city visited highlighting could be useful
+  - do not fake country/city fills without proper boundary data
+  - if we add it, keep the base map clean and low-noise
 - [ ] Revisit Step 5 map UX after real usage:
   - verify whether `Use chosen reel` / `Map only` switching feels obvious enough
   - decide whether the chosen reel should auto-enable map mode or stay an explicit button

@@ -102,6 +102,7 @@ def generate_album_map_entry_with_ai(album_id: str, request: GenerateMapEntryReq
             generation_mode=request.generation_mode,
             selected_media_ids=request.selected_media_ids,
             selected_reel_draft_name=request.selected_reel_draft_name,
+            selected_reel_variant_id=request.selected_reel_variant_id,
             selected_reel_title=request.selected_reel_title,
             selected_reel_caption=request.selected_reel_caption,
             selected_reel_video_strategy=request.selected_reel_video_strategy,

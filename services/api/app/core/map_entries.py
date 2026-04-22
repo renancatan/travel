@@ -118,6 +118,7 @@ class MapEntrySuggestionService:
         generation_mode: str,
         selected_media_ids: list[str] | None = None,
         selected_reel_draft_name: str | None = None,
+        selected_reel_variant_id: str | None = None,
         selected_reel_title: str | None = None,
         selected_reel_caption: str | None = None,
         selected_reel_video_strategy: str | None = None,
@@ -129,6 +130,7 @@ class MapEntrySuggestionService:
             user_prompt=user_prompt,
             selected_media_ids=selected_media_ids,
             selected_reel_draft_name=selected_reel_draft_name,
+            selected_reel_variant_id=selected_reel_variant_id,
             source="map_ai_fallback",
         )
 
@@ -153,6 +155,7 @@ class MapEntrySuggestionService:
                 user_prompt=user_prompt,
                 selected_media_ids=selected_media_ids,
                 selected_reel_draft_name=selected_reel_draft_name,
+                selected_reel_variant_id=selected_reel_variant_id,
             )
         except Exception:
             return fallback_entry
@@ -264,6 +267,7 @@ class MapEntrySuggestionService:
         user_prompt: str | None,
         selected_media_ids: list[str] | None,
         selected_reel_draft_name: str | None,
+        selected_reel_variant_id: str | None,
     ) -> dict[str, Any]:
         valid_media_ids = {str(item.get('id') or '').strip() for item in album.get("media_items") or []}
         candidate_media_ids = [
@@ -310,6 +314,10 @@ class MapEntrySuggestionService:
             "summary": str(data.get("summary") or fallback_entry.get("summary") or "").strip() or None,
             "selected_media_ids": candidate_media_ids[:8] or fallback_entry.get("selected_media_ids") or [],
             "selected_reel_draft_name": str(selected_reel_draft_name or fallback_entry.get("selected_reel_draft_name") or "").strip() or None,
+            "selected_reel_variant_id": str(
+                selected_reel_variant_id or fallback_entry.get("selected_reel_variant_id") or ""
+            ).strip()
+            or None,
             "generation_prompt": str(user_prompt or "").strip() or None,
             "gps_point_count": int(fallback_entry.get("gps_point_count") or 0),
             "source": "map_ai",
@@ -325,6 +333,7 @@ def build_auto_map_entry(
     user_prompt: str | None = None,
     selected_media_ids: list[str] | None = None,
     selected_reel_draft_name: str | None = None,
+    selected_reel_variant_id: str | None = None,
     source: str = "album_auto",
 ) -> dict[str, Any]:
     gps_media_items = _get_gps_media_items(album)
@@ -387,6 +396,7 @@ def build_auto_map_entry(
         "summary": summary,
         "selected_media_ids": selected_ids,
         "selected_reel_draft_name": str(selected_reel_draft_name or "").strip() or None,
+        "selected_reel_variant_id": str(selected_reel_variant_id or "").strip() or None,
         "generation_prompt": str(user_prompt or "").strip() or None,
         "gps_point_count": len(gps_media_items),
         "source": source,
@@ -433,6 +443,8 @@ def merge_map_entry(
         merged_entry["summary"] = str(updates.get("summary") or "").strip() or None
     if "selected_reel_draft_name" in updates:
         merged_entry["selected_reel_draft_name"] = str(updates.get("selected_reel_draft_name") or "").strip() or None
+    if "selected_reel_variant_id" in updates:
+        merged_entry["selected_reel_variant_id"] = str(updates.get("selected_reel_variant_id") or "").strip() or None
     if "generation_prompt" in updates:
         merged_entry["generation_prompt"] = str(updates.get("generation_prompt") or "").strip() or None
     if "selected_media_ids" in updates:

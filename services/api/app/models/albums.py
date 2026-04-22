@@ -25,6 +25,7 @@ class UpdateMapEntryRequest(BaseModel):
     summary: str | None = Field(default=None, max_length=1000)
     selected_media_ids: list[str] | None = Field(default=None, max_length=8)
     selected_reel_draft_name: str | None = Field(default=None, max_length=160)
+    selected_reel_variant_id: str | None = Field(default=None, max_length=120)
     generation_prompt: str | None = Field(default=None, max_length=400)
 
 
@@ -33,6 +34,7 @@ class GenerateMapEntryRequest(BaseModel):
     generation_mode: Literal["chosen_reel", "map_only"] = "chosen_reel"
     selected_media_ids: list[str] | None = Field(default=None, max_length=12)
     selected_reel_draft_name: str | None = Field(default=None, max_length=160)
+    selected_reel_variant_id: str | None = Field(default=None, max_length=120)
     selected_reel_title: str | None = Field(default=None, max_length=200)
     selected_reel_caption: str | None = Field(default=None, max_length=2200)
     selected_reel_video_strategy: str | None = Field(default=None, max_length=80)
@@ -155,6 +157,7 @@ class MapEntryResponse(BaseModel):
     summary: str | None = None
     selected_media_ids: list[str] = Field(default_factory=list)
     selected_reel_draft_name: str | None = None
+    selected_reel_variant_id: str | None = None
     generation_prompt: str | None = None
     gps_point_count: int = 0
     source: str = "album_auto"

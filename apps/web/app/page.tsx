@@ -69,6 +69,7 @@ type MapEntry = {
   summary: string | null;
   selected_media_ids: string[];
   selected_reel_draft_name: string | null;
+  selected_reel_variant_id: string | null;
   generation_prompt: string | null;
   gps_point_count: number;
   source: string;
@@ -2913,6 +2914,7 @@ export default function Page() {
           generation_mode: mapGenerationMode,
           selected_media_ids: mapGenerationMode === "chosen_reel" ? chosenReelMediaIds : undefined,
           selected_reel_draft_name: mapGenerationMode === "chosen_reel" ? workingReelDraft?.draft_name ?? null : null,
+          selected_reel_variant_id: mapGenerationMode === "chosen_reel" ? selectedEditorVariantId ?? null : null,
           selected_reel_title: mapGenerationMode === "chosen_reel" ? workingReelDraft?.title ?? null : null,
           selected_reel_caption: mapGenerationMode === "chosen_reel" ? workingReelDraft?.caption ?? null : null,
           selected_reel_video_strategy:
