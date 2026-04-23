@@ -29,6 +29,13 @@ type MediaItem = {
   analysis_frame_timestamps_seconds: number[];
   media_score: number | null;
   media_score_label: string | null;
+  processing_profile: string | null;
+  processing_profile_label: string | null;
+  processing_recommendation: string | null;
+  analysis_strategy: string | null;
+  is_heavy_video: boolean;
+  video_duration_tier: string | null;
+  video_resolution_tier: string | null;
   detected_at: string;
   created_at: string;
 };
@@ -271,6 +278,8 @@ type ReelDraftVariant = {
 type ReelVariantRequestSummary = {
   mode: "auto" | "preset" | "custom_range";
   label: string;
+  policy_id?: string | null;
+  policy_label?: string | null;
   preset_variant_id: string | null;
   target_duration_seconds: number | null;
   min_duration_seconds: number | null;
@@ -388,20 +397,22 @@ function formatReelVariantRequestSummary(summary: ReelVariantRequestSummary | nu
     return "Auto lets AI pick one best duration from the current album.";
   }
 
+  const policySuffix = summary.policy_label ? ` • ${summary.policy_label}` : "";
+
   if (summary.mode === "custom_range") {
     const minimum = summary.min_duration_seconds ?? 0;
     const maximum = summary.max_duration_seconds ?? 0;
     const chosen = summary.target_duration_seconds;
     return chosen !== null
-      ? `${summary.label} • AI chose ${formatEditableDurationValue(chosen)}s within that range.`
-      : summary.label;
+      ? `${summary.label}${policySuffix} • AI chose ${formatEditableDurationValue(chosen)}s within that range.`
+      : `${summary.label}${policySuffix}`;
   }
 
   if (summary.mode === "preset") {
-    return `${summary.label} • fixed target length for this reel suggestion.`;
+    return `${summary.label}${policySuffix} • fixed target length for this reel suggestion.`;
   }
 
-  return summary.label;
+  return `${summary.label}${policySuffix}`;
 }
 
 function formatFrameRate(frameRate: number): string {
@@ -874,7 +885,11 @@ async function extractVideoFrameSamples(file: File): Promise<AnalysisFrameSample
       };
       const handleError = () => {
         cleanup();
-        reject(new Error(`Could not read video frames from ${file.name}.`));
+        reject(
+          new Error(
+            "Browser frame sampling was skipped because this video could not be decoded locally. The upload can still work, but this MP4 likely uses an unsupported codec or device-specific metadata track.",
+          ),
+        );
       };
       const cleanup = () => {
         video.removeEventListener("loadeddata", handleLoaded);
@@ -958,6 +973,49 @@ async function seekVideoForFrame(video: HTMLVideoElement, timestamp: number): Pr
   });
 
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+}
+
+type InlineVideoPreviewProps = {
+  alt: string;
+  posterUrl?: string;
+  src: string;
+};
+
+function InlineVideoPreview({ alt, posterUrl, src }: InlineVideoPreviewProps) {
+  const [hasPlaybackError, setHasPlaybackError] = useState(false);
+
+  useEffect(() => {
+    setHasPlaybackError(false);
+  }, [src]);
+
+  return (
+    <div className="inline-video-preview">
+      {hasPlaybackError ? (
+        <div className="inline-video-preview-fallback">
+          {posterUrl ? (
+            <img alt={alt} src={posterUrl} />
+          ) : (
+            <div className="inline-video-preview-empty">
+              <strong>Video preview unavailable</strong>
+              <span>This browser could not decode this MP4 inline.</span>
+            </div>
+          )}
+          <div className="inline-video-preview-note">
+            <strong>Browser preview unavailable</strong>
+            <span>This file likely uses an unsupported codec or a device-specific MP4 track such as DJI metadata.</span>
+          </div>
+        </div>
+      ) : (
+        <video
+          controls
+          onError={() => setHasPlaybackError(true)}
+          poster={posterUrl}
+          preload="metadata"
+          src={src}
+        />
+      )}
+    </div>
+  );
 }
 
 type DraftVideoStepPreviewProps = {
@@ -2256,14 +2314,13 @@ export default function Page() {
       const warnings: string[] = [];
 
       for (const file of selectedFiles) {
-        const buffer = await file.arrayBuffer();
         const response = await fetch(`${API_BASE_URL}/albums/${targetAlbum.id}/upload`, {
           method: "POST",
           headers: {
             "Content-Type": file.type || "application/octet-stream",
             "X-Filename": file.name,
           },
-          body: buffer,
+          body: file,
         });
 
         if (!response.ok) {
@@ -2272,19 +2329,25 @@ export default function Page() {
 
         const uploadResult = (await response.json()) as UploadMediaResponse;
         if (uploadResult.media_item.media_kind === "video") {
-          try {
-            const frames = await extractVideoFrameSamples(file);
-            if (frames.length > 0) {
-              await uploadVideoAnalysisFrames(targetAlbum.id, uploadResult.media_item.id, frames);
-              sampledVideoCount += 1;
-              sampledFrameCount += frames.length;
-            } else {
-              warnings.push(`No browser frame samples were created for ${file.name}.`);
-            }
-          } catch (error) {
+          if (uploadResult.media_item.analysis_strategy !== "interactive") {
             warnings.push(
-              error instanceof Error ? `${file.name}: ${error.message}` : `${file.name}: video frame sampling failed.`,
+              `${file.name}: browser frame sampling was skipped for this ${uploadResult.media_item.processing_profile_label?.toLowerCase() ?? "large"} upload.`,
             );
+          } else {
+            try {
+              const frames = await extractVideoFrameSamples(file);
+              if (frames.length > 0) {
+                await uploadVideoAnalysisFrames(targetAlbum.id, uploadResult.media_item.id, frames);
+                sampledVideoCount += 1;
+                sampledFrameCount += frames.length;
+              } else {
+                warnings.push(`No browser frame samples were created for ${file.name}.`);
+              }
+            } catch (error) {
+              warnings.push(
+                error instanceof Error ? `${file.name}: ${error.message}` : `${file.name}: video frame sampling failed.`,
+              );
+            }
           }
         }
       }
@@ -5050,7 +5113,11 @@ export default function Page() {
                         {item.media_kind === "image" ? (
                           <img alt="" aria-hidden="true" src={mediaUrl} />
                         ) : item.media_kind === "video" ? (
-                          <video controls poster={thumbnailUrl} preload="metadata" src={mediaUrl} />
+                          <InlineVideoPreview
+                            alt={item.original_filename}
+                            posterUrl={thumbnailUrl}
+                            src={mediaUrl}
+                          />
                         ) : (
                           <span>No inline preview yet</span>
                         )}
@@ -5077,6 +5144,13 @@ export default function Page() {
                             <span>
                               {insight.use_case} • {insight.why_it_matters}
                             </span>
+                          </div>
+                        ) : null}
+
+                        {item.media_kind === "video" && item.processing_profile_label ? (
+                          <div className={`ai-inline-note processing-note processing-note-${item.processing_profile ?? "standard"}`}>
+                            <strong>{item.processing_profile_label}</strong>
+                            <span>{item.processing_recommendation ?? "Use the normal interactive album flow."}</span>
                           </div>
                         ) : null}
 
@@ -5125,6 +5199,24 @@ export default function Page() {
                             <div className="meta-card">
                               <strong>Metadata read</strong>
                               <span>{item.metadata_source}</span>
+                            </div>
+                          ) : null}
+                          {item.analysis_strategy ? (
+                            <div className="meta-card">
+                              <strong>Analysis path</strong>
+                              <span>{item.analysis_strategy}</span>
+                            </div>
+                          ) : null}
+                          {item.video_duration_tier ? (
+                            <div className="meta-card">
+                              <strong>Duration tier</strong>
+                              <span>{item.video_duration_tier}</span>
+                            </div>
+                          ) : null}
+                          {item.video_resolution_tier ? (
+                            <div className="meta-card">
+                              <strong>Resolution tier</strong>
+                              <span>{item.video_resolution_tier}</span>
                             </div>
                           ) : null}
                           {item.analysis_frame_count > 0 ? (

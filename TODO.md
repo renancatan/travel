@@ -33,6 +33,39 @@
 - [ ] Change reel video logic so it does not just list all strong videos:
   - pick one hero video when that is the best reel path
   - or extract/select moments across multiple videos to build one reel
+- [ ] Add a separate heavy-video ingest path for realistic travel footage:
+  - keep the current sync/browser-friendly path for lighter clips
+  - route heavier inputs into async processing
+  - start testing with `5m` to `15m` 4K files before trying full dive sessions
+  - prepare for realistic worst-case albums such as:
+    - `3 x 1h` 4K diving videos
+    - plus drone clips
+    - plus mobile/action-cam shots
+- [ ] Add long-form reel generation rules for heavy source videos:
+  - for longer videos, generate multiple clearly different reel candidates from the same source
+  - default to `3` distinct story cuts, not `3` tiny variants of the same cut
+  - enforce low overlap between those story cuts
+  - likely target lengths for long-form sources:
+    - `15s`
+    - `30s`
+    - `60s`
+  - avoid defaulting to every duration at once; prefer:
+    - user picks one target length and gets `3` different reels
+    - or AI picks one best target length and gets `3` different reels
+  - keep "all durations x all variants" as an advanced mode later
+- [ ] Define video-handling thresholds so the app can choose the right path automatically:
+  - `light` path for short clips and small albums
+  - `heavy` path for long clips, 4K, or large combined album duration
+  - keep those thresholds centralized in config instead of scattering them across the app
+- [ ] For the heavy path, add server-side preprocessing before AI review:
+  - `ffprobe` metadata
+  - analysis proxy / mezzanine video
+  - extracted keyframes or scene-contact sheets
+  - timeline candidate windows for later AI ranking
+- [ ] Move heavy media analysis off the request path:
+  - background worker job
+  - processing status in the UI
+  - album becomes reviewable progressively instead of waiting for the full raw footage
 - [x] Export a render-ready reel draft spec with clip windows and `ffmpeg` command planning.
 - [x] Add a real local reel render action plus preview/download flow.
 - [x] Validate real local reel rendering with installed `ffmpeg`.
@@ -55,6 +88,14 @@
 - [ ] Add vision-based scene/category suggestions such as cave, beach, bar, boat, city, food.
 - [ ] Add basic aesthetic ranking heuristics before personal-style learning.
 - [ ] Add clip extraction with `ffmpeg`.
+- [ ] Add timeline segmentation for longer videos:
+  - first-pass window generation from duration/motion/spacing heuristics
+  - later optional scene detection for stronger cut candidates
+  - keep AI focused on ranked candidate windows, not entire raw files
+- [ ] Add "storyline extraction" before final reel building for heavy videos:
+  - detect distinct chapters/moments first
+  - then build reels from those chapters
+  - this should reduce repetitive cuts in long dive and drone footage
 - [ ] Add soundtrack selection and audio-mixing controls on top of the current source-audio-preserving render path.
 - [x] Add first-pass manual reel editing controls:
   - reorder beats
@@ -88,6 +129,16 @@
   - `Custom range`
   - centralize preset lengths in:
     - [services/api/app/core/reel_variant_presets.py](/home/renancatan/renan/projects/travel/services/api/app/core/reel_variant_presets.py)
+- [x] Split reel-variant business rules into centralized short-form vs long-form config:
+  - keep short clips on the current fast path
+  - give long-form albums their own auto-target preferences and future story-bundle targets
+  - keep those thresholds and business-rule knobs in the preset module instead of scattering them through suggestion code
+- [x] Add first-pass media processing classification:
+  - centralize standard / long-form / heavy-async rules in:
+    - [services/api/app/core/media_processing_policy.py](/home/renancatan/renan/projects/travel/services/api/app/core/media_processing_policy.py)
+  - expose processing profile metadata on media items
+  - show the selected analysis path on the media cards
+  - expose these thresholds via `/runtime`
 - [ ] Expand AI reel variants further:
   - refine the new `Auto` / `10s` / `15s` / `30s` / `Custom range` selector with better duration-picking logic
   - keep tuning `Auto` so `30s` stays a rare, justified choice instead of the default for medium albums
@@ -233,6 +284,11 @@
   - separate API and worker services
 - [ ] Add Postgres for metadata and map records.
 - [ ] Add a background worker for processing uploads and generating derivatives.
+- [ ] Add a long-running media worker profile specifically for heavy video jobs:
+  - proxy generation
+  - timeline segmentation
+  - thumbnail / contact-sheet generation
+  - later transcription and richer multimodal analysis
 - [ ] Add cheap first-stage deployment docs before adding heavier infra.
 
 ## Phase 7: Portability

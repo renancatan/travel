@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import re
 from copy import deepcopy
@@ -11,7 +12,10 @@ from fastapi.responses import FileResponse
 from services.api.app.core.album_suggestions import AlbumSuggestionService
 from services.api.app.core.file_repository import FileRepository
 from services.api.app.core.map_entries import MapEntrySuggestionService, build_auto_map_entry, merge_map_entry
-from services.api.app.core.media_metadata import build_media_metadata, enrich_saved_media_metadata
+from services.api.app.core.media_metadata import (
+    build_media_metadata_from_file,
+    enrich_saved_media_metadata,
+)
 from services.api.app.core.reel_renderer import ReelRenderError, ReelRenderer
 from services.api.app.models.albums import (
     AlbumResponse,
@@ -548,19 +552,46 @@ async def upload_media(
     if not x_filename:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing X-Filename header.")
 
-    payload = await request.body()
-    if not payload:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty request body.")
-
     if repository.get_album(album_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
 
-    metadata = build_media_metadata(filename=x_filename, content_type=content_type, payload=payload)
-    media_item = repository.save_media(
-        album_id=album_id,
-        original_filename=x_filename,
+    storage_target = repository.reserve_media_storage(album_id=album_id, original_filename=x_filename)
+    stored_path = storage_target["stored_path"]
+    payload_hasher = hashlib.sha256()
+    total_bytes = 0
+
+    try:
+        with stored_path.open("wb") as handle:
+            async for chunk in request.stream():
+                if not chunk:
+                    continue
+                handle.write(chunk)
+                payload_hasher.update(chunk)
+                total_bytes += len(chunk)
+    except Exception:
+        if stored_path.exists():
+            stored_path.unlink()
+        raise
+
+    if total_bytes <= 0:
+        if stored_path.exists():
+            stored_path.unlink()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Empty request body.")
+
+    metadata = build_media_metadata_from_file(
+        filename=x_filename,
         content_type=content_type,
-        payload=payload,
+        stored_path=stored_path,
+        file_size_bytes=total_bytes,
+        sha256=payload_hasher.hexdigest(),
+    )
+    media_item = repository.save_media_record(
+        album_id=album_id,
+        media_id=str(storage_target["media_id"]),
+        original_filename=x_filename,
+        stored_filename=str(storage_target["stored_filename"]),
+        stored_path=stored_path,
+        content_type=content_type,
         metadata=metadata,
     )
     enriched_updates = enrich_saved_media_metadata(media_item)

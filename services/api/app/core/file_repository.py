@@ -12,6 +12,7 @@ from uuid import uuid4
 from services.api.app.core.map_place_normalizer import normalize_map_place_fields
 from services.api.app.core.settings import get_settings
 from services.api.app.core.media_metadata import enrich_saved_media_metadata
+from services.api.app.core.media_processing_policy import classify_media_processing
 
 
 def _utc_now() -> str:
@@ -296,6 +297,21 @@ class FileRepository:
         payload: bytes,
         metadata: dict[str, Any],
     ) -> dict[str, Any]:
+        storage_target = self.reserve_media_storage(album_id=album_id, original_filename=original_filename)
+        stored_path = storage_target["stored_path"]
+        stored_path.write_bytes(payload)
+
+        return self.save_media_record(
+            album_id=album_id,
+            media_id=str(storage_target["media_id"]),
+            original_filename=original_filename,
+            stored_filename=str(storage_target["stored_filename"]),
+            stored_path=stored_path,
+            content_type=content_type,
+            metadata=metadata,
+        )
+
+    def reserve_media_storage(self, *, album_id: str, original_filename: str) -> dict[str, Any]:
         album = self.get_album(album_id)
         if album is None:
             raise FileNotFoundError(f"Album {album_id} was not found.")
@@ -307,7 +323,28 @@ class FileRepository:
         media_dir = self._album_dir(album_id) / "media"
         media_dir.mkdir(parents=True, exist_ok=True)
         stored_path = media_dir / stored_filename
-        stored_path.write_bytes(payload)
+
+        return {
+            "media_id": media_id,
+            "stored_filename": stored_filename,
+            "stored_path": stored_path,
+            "relative_path": str(stored_path.relative_to(self.storage_root)),
+        }
+
+    def save_media_record(
+        self,
+        *,
+        album_id: str,
+        media_id: str,
+        original_filename: str,
+        stored_filename: str,
+        stored_path: Path,
+        content_type: str | None,
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        album = self.get_album(album_id)
+        if album is None:
+            raise FileNotFoundError(f"Album {album_id} was not found.")
 
         media_item = self._normalize_media_item(
             {
@@ -459,9 +496,18 @@ class FileRepository:
             "analysis_frame_count": 0,
             "media_score": None,
             "media_score_label": None,
+            "processing_profile": None,
+            "processing_profile_label": None,
+            "processing_recommendation": None,
+            "analysis_strategy": None,
+            "is_heavy_video": False,
+            "video_duration_tier": None,
+            "video_resolution_tier": None,
             "detected_at": _utc_now(),
         }
-        return {**defaults, **media_item}
+        normalized = {**defaults, **media_item}
+        normalized.update(classify_media_processing(normalized))
+        return normalized
 
     @staticmethod
     def _normalize_map_entry(map_entry: dict[str, Any] | None) -> dict[str, Any] | None:

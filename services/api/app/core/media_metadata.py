@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from services.api.app.core.media_processing_policy import classify_media_processing
+
 SUPPORTED_ISO_VIDEO_EXTENSIONS = {".m4v", ".mov", ".mp4", ".qt"}
 SUPPORTED_ISO_VIDEO_CONTENT_TYPES = {
     "application/mp4",
@@ -72,7 +74,7 @@ def build_media_metadata(
         frame_rate=frame_rate,
     )
 
-    return {
+    metadata = {
         "media_kind": media_kind,
         "file_size_bytes": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest(),
@@ -93,18 +95,104 @@ def build_media_metadata(
         "media_score_label": media_score_label,
         "detected_at": datetime.now(UTC).isoformat(),
     }
+    metadata.update(classify_media_processing(metadata))
+    return metadata
+
+
+def build_media_metadata_from_file(
+    *,
+    filename: str,
+    content_type: str | None,
+    stored_path: Path,
+    file_size_bytes: int | None = None,
+    sha256: str | None = None,
+) -> dict[str, Any]:
+    detected_content_type = content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    media_kind = _classify_media_kind(detected_content_type)
+    resolved_file_size_bytes = file_size_bytes if file_size_bytes is not None else stored_path.stat().st_size
+    resolved_sha256 = sha256 or _compute_file_sha256(stored_path)
+
+    width: int | None = None
+    height: int | None = None
+    duration_seconds: float | None = None
+    frame_rate: float | None = None
+    video_codec: str | None = None
+    has_audio: bool | None = None
+    captured_at: str | None = None
+    source_device: str | None = None
+    gps: dict[str, Any] | None = None
+    metadata_source = "basic"
+
+    if media_kind == "image":
+        payload = stored_path.read_bytes()
+        width, height = _extract_image_dimensions(payload)
+        image_embedded_metadata = _extract_image_embedded_metadata(payload)
+        captured_at = image_embedded_metadata.get("captured_at")
+        source_device = image_embedded_metadata.get("source_device")
+        gps = image_embedded_metadata.get("gps")
+        metadata_source = _compose_metadata_source(
+            "image_headers" if width and height else "image_basic",
+            image_embedded_metadata.get("metadata_source"),
+        )
+    elif media_kind == "video":
+        ffprobe_metadata = _extract_video_metadata_with_ffprobe(stored_path)
+        if ffprobe_metadata:
+            width = ffprobe_metadata.get("width")
+            height = ffprobe_metadata.get("height")
+            duration_seconds = ffprobe_metadata.get("duration_seconds")
+            frame_rate = ffprobe_metadata.get("frame_rate")
+            video_codec = ffprobe_metadata.get("video_codec")
+            has_audio = ffprobe_metadata.get("has_audio")
+            metadata_source = ffprobe_metadata.get("metadata_source", "video_ffprobe")
+        else:
+            metadata_source = "video_basic"
+
+    media_score, media_score_label = _build_media_score(
+        media_kind=media_kind,
+        content_type=detected_content_type,
+        file_size_bytes=resolved_file_size_bytes,
+        width=width,
+        height=height,
+        duration_seconds=duration_seconds,
+        frame_rate=frame_rate,
+    )
+
+    metadata = {
+        "media_kind": media_kind,
+        "file_size_bytes": resolved_file_size_bytes,
+        "sha256": resolved_sha256,
+        "file_extension": Path(filename).suffix.lower(),
+        "captured_at": captured_at,
+        "source_device": source_device,
+        "width": width,
+        "height": height,
+        "duration_seconds": duration_seconds,
+        "frame_rate": frame_rate,
+        "video_codec": video_codec,
+        "has_audio": has_audio,
+        "gps": gps,
+        "metadata_source": metadata_source,
+        "thumbnail_relative_path": None,
+        "thumbnail_content_type": None,
+        "media_score": media_score,
+        "media_score_label": media_score_label,
+        "detected_at": datetime.now(UTC).isoformat(),
+    }
+    metadata.update(classify_media_processing(metadata))
+    return metadata
 
 
 def enrich_saved_media_metadata(media_item: dict[str, Any]) -> dict[str, Any]:
-    video_path = Path(media_item.get("stored_path", ""))
-    if not video_path.exists():
+    stored_path = Path(media_item.get("stored_path", ""))
+    if not stored_path.exists():
         return {}
 
-    payload = video_path.read_bytes()
-    base_metadata = build_media_metadata(
-        filename=str(media_item.get("original_filename") or media_item.get("stored_filename") or video_path.name),
+    base_metadata = build_media_metadata_from_file(
+        filename=str(media_item.get("original_filename") or media_item.get("stored_filename") or stored_path.name),
         content_type=str(media_item.get("content_type") or "application/octet-stream"),
-        payload=payload,
+        stored_path=stored_path,
+        file_size_bytes=_coerce_int(media_item.get("file_size_bytes")),
+        sha256=str(media_item.get("sha256") or "").strip() or None,
     )
     updates: dict[str, Any] = {
         key: base_metadata.get(key)
@@ -128,14 +216,14 @@ def enrich_saved_media_metadata(media_item: dict[str, Any]) -> dict[str, Any]:
     }
 
     if media_item.get("media_kind") == "video":
-        ffprobe_metadata = _extract_video_metadata_with_ffprobe(video_path)
+        ffprobe_metadata = _extract_video_metadata_with_ffprobe(stored_path)
         if ffprobe_metadata:
             updates.update(ffprobe_metadata)
 
         thumbnail_metadata = _generate_video_thumbnail(
-            video_path=video_path,
+            video_path=stored_path,
             stored_filename=str(media_item.get("stored_filename", "")),
-            storage_root=_resolve_storage_root_from_path(video_path),
+            storage_root=_resolve_storage_root_from_path(stored_path),
         )
         if thumbnail_metadata:
             updates.update(thumbnail_metadata)
@@ -152,6 +240,7 @@ def enrich_saved_media_metadata(media_item: dict[str, Any]) -> dict[str, Any]:
     )
     updates["media_score"] = media_score
     updates["media_score_label"] = media_score_label
+    updates.update(classify_media_processing({**merged_item, **updates}))
 
     if not updates.get("metadata_source") and not merged_item.get("metadata_source"):
         updates["metadata_source"] = "video_basic"
@@ -173,6 +262,17 @@ def _classify_media_kind(content_type: str) -> str:
     if content_type.startswith("video/"):
         return "video"
     return "unknown"
+
+
+def _compute_file_sha256(file_path: Path) -> str:
+    digest = hashlib.sha256()
+    with file_path.open("rb") as handle:
+        while True:
+            chunk = handle.read(1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _extract_image_dimensions(payload: bytes) -> tuple[int | None, int | None]:
@@ -559,6 +659,11 @@ def _generate_video_thumbnail(
             "-y",
             "-i",
             str(video_path),
+            "-map",
+            "0:v:0",
+            "-an",
+            "-sn",
+            "-dn",
             "-frames:v",
             "1",
             "-q:v",

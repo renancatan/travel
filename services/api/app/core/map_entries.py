@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, datetime
+import re
 from typing import Any
 
 from services.api.app.core.map_ai_settings import get_map_ai_settings
@@ -101,6 +102,17 @@ PLACE_HINTS: list[dict[str, Any]] = [
         "latitude": 7.1907,
         "longitude": 125.4553,
         "group_key": "general",
+    },
+    {
+        "keywords": {"pamilacan", "baclayon", "bohol sea"},
+        "country": "Philippines",
+        "state": "Bohol",
+        "city": "Pamilacan",
+        "region": "Visayas",
+        "location_label": "Pamilacan Island",
+        "latitude": 9.4953,
+        "longitude": 123.9226,
+        "group_key": "beaches",
     },
 ]
 
@@ -212,9 +224,7 @@ class MapEntrySuggestionService:
             "gps_points": [
                 media_item.get("gps")
                 for media_item in media_items
-                if isinstance(media_item.get("gps"), dict)
-                and isinstance((media_item.get("gps") or {}).get("latitude"), (int, float))
-                and isinstance((media_item.get("gps") or {}).get("longitude"), (int, float))
+                if _is_valid_gps_payload(media_item.get("gps"))
             ],
             "taxonomy": {
                 "group_keys": list(MAP_GROUPS.keys()),
@@ -288,15 +298,36 @@ class MapEntrySuggestionService:
             location_label=data.get("location_label") or fallback_entry.get("location_label"),
             group_key=group_key,
         )
+        normalized_place_corpus = " ".join(
+            part
+            for part in (
+                normalized_place_fields["title"],
+                normalized_place_fields["country"],
+                normalized_place_fields["state"],
+                normalized_place_fields["city"],
+                normalized_place_fields["region"],
+                normalized_place_fields["location_label"],
+                str(user_prompt or "").strip(),
+                str(fallback_entry.get("generation_prompt") or "").strip(),
+            )
+            if isinstance(part, str) and part.strip()
+        ).lower()
+        matched_place_hint = _match_place_hint(normalized_place_corpus)
+        if matched_place_hint:
+            latitude = float(matched_place_hint["latitude"])
+            longitude = float(matched_place_hint["longitude"])
+        else:
+            latitude = float(data.get("latitude") if isinstance(data.get("latitude"), (int, float)) else fallback_entry["latitude"])
+            longitude = float(
+                data.get("longitude") if isinstance(data.get("longitude"), (int, float)) else fallback_entry["longitude"]
+            )
         now = _utc_now()
         return {
             "album_id": album["id"],
             "album_name": album.get("name") or "Untitled album",
             "title": normalized_place_fields["title"],
-            "latitude": float(data.get("latitude") if isinstance(data.get("latitude"), (int, float)) else fallback_entry["latitude"]),
-            "longitude": float(
-                data.get("longitude") if isinstance(data.get("longitude"), (int, float)) else fallback_entry["longitude"]
-            ),
+            "latitude": latitude,
+            "longitude": longitude,
             "country": normalized_place_fields["country"],
             "state": normalized_place_fields["state"],
             "city": normalized_place_fields["city"],
@@ -517,11 +548,7 @@ def _get_gps_media_items(album: dict[str, Any]) -> list[dict[str, Any]]:
     gps_media_items: list[dict[str, Any]] = []
     for media_item in album.get("media_items") or []:
         gps = media_item.get("gps")
-        if not isinstance(gps, dict):
-            continue
-        latitude = gps.get("latitude")
-        longitude = gps.get("longitude")
-        if isinstance(latitude, (int, float)) and isinstance(longitude, (int, float)):
+        if _is_valid_gps_payload(gps):
             gps_media_items.append(media_item)
     return gps_media_items
 
@@ -595,10 +622,16 @@ def _build_summary(album: dict[str, Any]) -> str | None:
 
 
 def _match_place_hint(corpus: str) -> dict[str, Any] | None:
+    normalized_corpus = corpus.lower()
+    corpus_tokens = set(re.findall(r"[a-z0-9]+", normalized_corpus))
     best_match: dict[str, Any] | None = None
     best_score = 0
     for place_hint in PLACE_HINTS:
-        score = sum(1 for keyword in place_hint["keywords"] if keyword in corpus)
+        score = sum(
+            1
+            for keyword in place_hint["keywords"]
+            if _keyword_matches_corpus(str(keyword), normalized_corpus, corpus_tokens)
+        )
         if score > best_score:
             best_match = place_hint
             best_score = score
@@ -646,3 +679,30 @@ def _pick_selected_media_ids(album: dict[str, Any], preferred_media_ids: list[st
             break
 
     return picked_media_ids
+
+
+def _keyword_matches_corpus(keyword: str, normalized_corpus: str, corpus_tokens: set[str]) -> bool:
+    normalized_keyword = str(keyword or "").strip().lower()
+    if not normalized_keyword:
+        return False
+    if " " in normalized_keyword:
+        return normalized_keyword in normalized_corpus
+    return normalized_keyword in corpus_tokens
+
+
+def _is_valid_gps_payload(gps: Any) -> bool:
+    if not isinstance(gps, dict):
+        return False
+
+    latitude = gps.get("latitude")
+    longitude = gps.get("longitude")
+    if not isinstance(latitude, (int, float)) or not isinstance(longitude, (int, float)):
+        return False
+
+    latitude_value = float(latitude)
+    longitude_value = float(longitude)
+    if not (-90.0 <= latitude_value <= 90.0 and -180.0 <= longitude_value <= 180.0):
+        return False
+    if abs(latitude_value) < 1e-6 and abs(longitude_value) < 1e-6:
+        return False
+    return True

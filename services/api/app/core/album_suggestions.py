@@ -18,7 +18,11 @@ except ImportError:  # pragma: no cover - optional dependency path
     types = None
 
 from services.api.app.core.llm_router import MultiProviderRouter
-from services.api.app.core.reel_variant_presets import get_reel_variant_presets
+from services.api.app.core.reel_variant_presets import (
+    get_reel_creative_profiles,
+    get_reel_variant_policy,
+    get_reel_variant_presets,
+)
 from services.api.app.core.settings import get_settings
 
 SUPPORTED_IMAGE_MIME_TYPES = {
@@ -518,6 +522,12 @@ class AlbumSuggestionService:
             "mode": mode,
             "label": str(raw_summary.get("label") or mode).strip() or mode,
         }
+        policy_id = str(raw_summary.get("policy_id") or "").strip()
+        if policy_id:
+            normalized_summary["policy_id"] = policy_id
+        policy_label = str(raw_summary.get("policy_label") or "").strip()
+        if policy_label:
+            normalized_summary["policy_label"] = policy_label
         preset_variant_id = str(raw_summary.get("preset_variant_id") or "").strip()
         if preset_variant_id:
             normalized_summary["preset_variant_id"] = preset_variant_id
@@ -663,6 +673,7 @@ class AlbumSuggestionService:
                 role_specs=spec["role_specs"],
                 target_duration_seconds=float(spec["target_duration_seconds"]),
                 max_video_steps=int(spec["max_video_steps"]) if spec.get("max_video_steps") is not None else None,
+                window_selection_offset=int(spec.get("window_selection_offset") or 0),
             )
             if not reel_plan:
                 continue
@@ -712,7 +723,8 @@ class AlbumSuggestionService:
         carousel_candidates: list[dict[str, Any]],
         request: dict[str, Any] | None,
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
-        presets = get_reel_variant_presets()
+        policy = get_reel_variant_policy(media_items)
+        presets = get_reel_variant_presets(policy_id=str(policy.get("policy_id") or "short_form"))
         preset_by_id = {str(preset["variant_id"]): preset for preset in presets}
         mode = str((request or {}).get("mode") or "auto").strip() or "auto"
 
@@ -729,6 +741,8 @@ class AlbumSuggestionService:
             ), {
                 "mode": "preset",
                 "label": str(preset["label"]),
+                "policy_id": str(policy.get("policy_id") or ""),
+                "policy_label": str(policy.get("label") or ""),
                 "preset_variant_id": str(preset["variant_id"]),
                 "target_duration_seconds": round(float(preset["target_duration_seconds"]), 1),
             }
@@ -752,6 +766,7 @@ class AlbumSuggestionService:
                 carousel_candidates=carousel_candidates,
                 minimum=minimum,
                 maximum=maximum,
+                policy=policy,
             )
             custom_variant = self._build_duration_variant_spec(
                 presets=presets,
@@ -768,6 +783,8 @@ class AlbumSuggestionService:
             ), {
                 "mode": "custom_range",
                 "label": f"Custom range {minimum:.1f}s to {maximum:.1f}s",
+                "policy_id": str(policy.get("policy_id") or ""),
+                "policy_label": str(policy.get("label") or ""),
                 "target_duration_seconds": round(target_duration_seconds, 1),
                 "min_duration_seconds": minimum,
                 "max_duration_seconds": maximum,
@@ -784,6 +801,7 @@ class AlbumSuggestionService:
             carousel_candidates=carousel_candidates,
             minimum=minimum,
             maximum=maximum,
+            policy=policy,
         )
         auto_variant = self._build_duration_variant_spec(
             presets=presets,
@@ -800,6 +818,8 @@ class AlbumSuggestionService:
         ), {
             "mode": "auto",
             "label": f"Auto • AI picked {target_duration_seconds:.1f}s",
+            "policy_id": str(policy.get("policy_id") or ""),
+            "policy_label": str(policy.get("label") or ""),
             "target_duration_seconds": round(target_duration_seconds, 1),
         }
 
@@ -832,10 +852,15 @@ class AlbumSuggestionService:
         carousel_candidates: list[dict[str, Any]],
         minimum: float,
         maximum: float,
+        policy: dict[str, Any] | None = None,
     ) -> float:
         video_items = [item for item in media_items if str(item.get("media_kind") or "") == "video"]
         image_items = [item for item in media_items if str(item.get("media_kind") or "") == "image"]
         total_video_duration = sum(max(0.0, float(item.get("duration_seconds") or 0.0)) for item in video_items)
+        max_single_video_duration = max(
+            (max(0.0, float(item.get("duration_seconds") or 0.0)) for item in video_items),
+            default=0.0,
+        )
         strong_video_candidates = sum(
             1
             for candidate in reel_candidates
@@ -854,21 +879,47 @@ class AlbumSuggestionService:
         richness_score += min(4, int(total_video_duration // 12))
         richness_score += min(2, len(image_items) // 3)
 
-        should_choose_extended = (
-            maximum >= 30.0
-            and len(media_items) >= 8
-            and strong_video_candidates >= 3
-            and len(image_items) >= 3
-            and total_video_duration >= 75.0
-            and strong_image_candidates >= 1
+        policy_id = str((policy or {}).get("policy_id") or "short_form")
+        preferred_targets = sorted(
+            {
+                round(float(value), 1)
+                for value in ((policy or {}).get("preferred_auto_targets_seconds") or [10.0, 15.0, 30.0])
+                if float(value) > 0.0
+            }
         )
+        targets_in_window = [value for value in preferred_targets if minimum <= value <= maximum]
 
-        if should_choose_extended:
-            desired_duration_seconds = 30.0
-        elif richness_score >= 7:
-            desired_duration_seconds = 15.0
+        if policy_id == "long_form":
+            if maximum >= 60.0 and (total_video_duration >= 1800.0 or max_single_video_duration >= 900.0):
+                desired_duration_seconds = 60.0
+            elif maximum >= 30.0 and (
+                total_video_duration >= 300.0
+                or max_single_video_duration >= 300.0
+                or strong_video_candidates >= 4
+                or richness_score >= 9
+            ):
+                desired_duration_seconds = 30.0
+            else:
+                desired_duration_seconds = 15.0
         else:
-            desired_duration_seconds = 10.0
+            should_choose_extended = (
+                maximum >= 30.0
+                and len(media_items) >= 8
+                and strong_video_candidates >= 3
+                and len(image_items) >= 3
+                and total_video_duration >= 75.0
+                and strong_image_candidates >= 1
+            )
+
+            if should_choose_extended:
+                desired_duration_seconds = 30.0
+            elif richness_score >= 7:
+                desired_duration_seconds = 15.0
+            else:
+                desired_duration_seconds = 10.0
+
+        if targets_in_window:
+            return min(targets_in_window, key=lambda target: abs(target - desired_duration_seconds))
 
         if maximum > 30.0:
             extension_ratio = min(1.0, max(0.0, (richness_score - 4) / 10))
@@ -887,32 +938,7 @@ class AlbumSuggestionService:
         family_label: str,
         request_mode: str,
     ) -> list[dict[str, Any]]:
-        creative_profiles = [
-            {
-                "profile_id": "balanced",
-                "label_suffix": "Balanced",
-                "creative_angle": "balanced story",
-                "title_seed_offset": 0,
-                "candidate_mode": "default",
-                "max_video_steps_delta": 0,
-            },
-            {
-                "profile_id": "motion",
-                "label_suffix": "Motion-first",
-                "creative_angle": "motion-led adventure",
-                "title_seed_offset": 1,
-                "candidate_mode": "motion",
-                "max_video_steps_delta": 1,
-            },
-            {
-                "profile_id": "scenic",
-                "label_suffix": "Scenic",
-                "creative_angle": "still-rich scenic journey",
-                "title_seed_offset": 2,
-                "candidate_mode": "scenic",
-                "max_video_steps_delta": -1,
-            },
-        ]
+        creative_profiles = get_reel_creative_profiles()
 
         expanded_specs: list[dict[str, Any]] = []
         for profile in creative_profiles:
@@ -933,6 +959,7 @@ class AlbumSuggestionService:
                     "title_seed_index": int(base_spec.get("title_seed_index") or 0) + int(profile["title_seed_offset"]),
                     "max_video_steps": max(1, min(len(role_specs), base_max_video_steps + int(profile["max_video_steps_delta"]))),
                     "candidate_mode": str(profile["candidate_mode"]),
+                    "window_selection_offset": int(profile.get("window_selection_offset") or 0),
                     "role_specs": role_specs,
                 }
             )
@@ -1020,6 +1047,7 @@ class AlbumSuggestionService:
         role_specs: list[dict[str, Any]],
         target_duration_seconds: float,
         max_video_steps: int | None,
+        window_selection_offset: int,
     ) -> dict[str, Any] | None:
         video_strategy, primary_video_id, secondary_video_id = self._decide_video_strategy(
             reel_candidates,
@@ -1066,6 +1094,7 @@ class AlbumSuggestionService:
                     role=str(spec["role"]),
                     usage_index=usage_index,
                     existing_windows=selected_video_windows.get(candidate["media_id"], []),
+                    window_selection_offset=window_selection_offset,
                 )
                 video_use_counts[candidate["media_id"]] = usage_index + 1
                 if clip_start_seconds is not None and clip_end_seconds is not None:
@@ -2379,6 +2408,7 @@ class AlbumSuggestionService:
         role: str,
         usage_index: int,
         existing_windows: list[tuple[float, float]] | None = None,
+        window_selection_offset: int = 0,
     ) -> tuple[float | None, float | None]:
         duration = self._to_float(media_item.get("duration_seconds"))
         if duration is None or duration <= 0:
@@ -2402,13 +2432,15 @@ class AlbumSuggestionService:
             return round(start, 2), round(end, 2)
 
         normalized_existing_windows = existing_windows or []
+        combined_index = max(0, usage_index + window_selection_offset)
         available_windows = [
             window
             for window in candidate_windows
             if all(self._window_overlap_ratio(window, previous_window) < 0.55 for previous_window in normalized_existing_windows)
         ]
         if available_windows:
-            start, end = available_windows[0]
+            chosen_index = min(combined_index, len(available_windows) - 1)
+            start, end = available_windows[chosen_index]
             return round(start, 2), round(end, 2)
 
         distinct_windows: list[tuple[float, float]] = []
@@ -2421,11 +2453,11 @@ class AlbumSuggestionService:
                 distinct_windows.append(window)
 
         if distinct_windows:
-            chosen_index = min(max(usage_index, 0), len(distinct_windows) - 1)
+            chosen_index = min(combined_index, len(distinct_windows) - 1)
             start, end = distinct_windows[chosen_index]
             return round(start, 2), round(end, 2)
 
-        chosen_index = min(max(usage_index, 0), len(candidate_windows) - 1)
+        chosen_index = min(combined_index, len(candidate_windows) - 1)
         start, end = candidate_windows[chosen_index]
         return round(start, 2), round(end, 2)
 

@@ -117,6 +117,13 @@ class MediaItemResponse(BaseModel):
     analysis_frame_timestamps_seconds: list[float] = Field(default_factory=list)
     media_score: float | None = None
     media_score_label: str | None = None
+    processing_profile: str | None = None
+    processing_profile_label: str | None = None
+    processing_recommendation: str | None = None
+    analysis_strategy: str | None = None
+    is_heavy_video: bool = False
+    video_duration_tier: str | None = None
+    video_resolution_tier: str | None = None
     detected_at: str
     created_at: str
 

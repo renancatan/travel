@@ -8,7 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from services.api.app.core.llm_router import MultiProviderRouter
 from services.api.app.core.map_ai_settings import get_map_ai_settings
 from services.api.app.core.media_metadata import get_media_tooling_status
-from services.api.app.core.reel_variant_presets import get_reel_variant_runtime_presets
+from services.api.app.core.media_processing_policy import get_media_processing_runtime_rules
+from services.api.app.core.reel_variant_presets import (
+    get_reel_variant_runtime_presets,
+    get_reel_variant_runtime_rules,
+)
 from services.api.app.core.settings import get_settings
 from services.api.app.models.api import AskRequest, AskResponse
 from services.api.app.routers.albums import router as albums_router
@@ -57,6 +61,8 @@ def runtime() -> dict[str, object]:
             "max_reel_target_duration_seconds": settings.max_reel_target_duration_seconds,
         },
         "reel_variant_presets": get_reel_variant_runtime_presets(),
+        "reel_variant_rules": get_reel_variant_runtime_rules(),
+        "media_processing_rules": get_media_processing_runtime_rules(),
         "providers": {
             "gemini_configured": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
             "azure_gpt4_configured": bool(

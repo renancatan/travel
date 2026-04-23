@@ -2,6 +2,8 @@
 
 This file is the working memory for the `travel` repo. Before making non-trivial changes, review this file to re-ground on product scope, architecture, current state, and open decisions. After each meaningful instruction set is completed, update this file.
 
+For a compact cross-chat handoff, read `INSTRUCTIONS.md` first. This file remains the rolling working memory and may contain more incremental details.
+
 ## Project Goal
 
 Build a practical v1 for travel-media curation aimed at digital nomads:
@@ -194,6 +196,21 @@ Implemented in `apps/web`:
   - selected stops can reopen with the chosen rendered compare reel as the main media
   - older entries without that saved variant id fall back to a best-effort draft-family match
 - the `/map` Leaflet surface now forces extra relayout after load, resize, and first camera move so the page no longer depends on a manual click/reset before the basemap appears
+- uploaded source videos that the browser cannot decode inline now fall back to a clearer preview state instead of only surfacing a vague browser file-read/permission-style error:
+  - upload still succeeds
+  - browser-side AI frame sampling is skipped with a more explicit unsupported-codec/device-track warning
+  - server-side thumbnail extraction now explicitly maps the primary video stream so DJI-style sidecar tracks are less likely to interfere
+- large uploads no longer require buffering the whole source file in browser memory first:
+  - the frontend now streams the `File` directly in `fetch` instead of calling `file.arrayBuffer()`
+  - the API now streams the request body to disk instead of calling `await request.body()`
+  - metadata refresh for saved videos now avoids rereading multi-gigabyte files fully into memory
+- long-form auto reel variants no longer collapse to a single compare reel as easily:
+  - creative profiles now carry a clip-window offset so `Balanced`, `Motion-first`, and `Scenic` can land on different windows from the same long source video
+  - this keeps heavy single-video albums closer to the intended "three distinct story candidates" behavior
+- map place matching is now stricter and safer:
+  - place hints now match normalized tokens instead of loose substrings, so album names like `petar50` no longer accidentally trigger the `petar` location hint
+  - invalid `0,0` style GPS metadata is ignored instead of counting as real coordinates
+  - `Pamilacan` now has a curated place hint so prompt + filenames can resolve to a stable Bohol/Visayas location even without trustworthy media GPS
 
 ## Current State
 
@@ -377,6 +394,53 @@ Implemented in `apps/web`:
 - longer variants also now lean on a broader candidate pool and can switch into more still-heavy storytelling instead of overusing one hero video
 - the current fixed variant presets now live in one backend file for easier future tuning:
   - [services/api/app/core/reel_variant_presets.py](/home/renancatan/renan/projects/travel/services/api/app/core/reel_variant_presets.py)
+- the reel-variant rules are now explicitly split into short-form and long-form policies:
+  - short-form keeps the current `10s / 15s / 30s` behavior for ordinary albums
+  - long-form uses separate auto-target preferences and can evolve without rewriting the short-form path
+  - the activation thresholds and future story-bundle targets are now centralized in the preset module instead of hidden in album-suggestion heuristics
+  - `/runtime` now exposes those policy rules for easier debugging and future frontend wiring
+- the current reel/media pipeline is still best suited to short and medium clips:
+  - browser-side frame sampling and sync review are fine for travel clips in the rough `seconds -> low minutes` range
+  - it is not yet the right long-term path for realistic heavy albums such as:
+    - 4K diving footage
+    - multiple `5m` to `15m` drone files
+    - several `1h` action-cam / dive files in one album
+  - those heavy cases need a separate async ingest lane instead of trying to push full-length source files through the current interactive path
+- the planned heavy-media direction is:
+  - keep the original upload untouched
+  - generate a smaller proxy/mezzanine version for analysis
+  - extract timeline candidates server-side with `ffprobe` / `ffmpeg` and later scene segmentation
+  - ask AI to reason over representative frames, clip windows, transcripts, and metadata instead of the full raw video
+  - move heavy processing into background jobs so the UI becomes "processing and then reviewing", not "block and wait"
+- first-pass heavy-media classification now exists:
+  - central rules live in:
+    - [services/api/app/core/media_processing_policy.py](/home/renancatan/renan/projects/travel/services/api/app/core/media_processing_policy.py)
+  - media items now carry:
+    - `processing_profile`
+    - `processing_profile_label`
+    - `processing_recommendation`
+    - `analysis_strategy`
+    - `video_duration_tier`
+    - `video_resolution_tier`
+  - current profiles are:
+    - `standard`
+    - `long_form`
+    - `heavy_async`
+  - the frontend media cards now display this profile so we can validate behavior before building the real worker
+  - `/runtime` exposes `media_processing_rules`
+  - this does not yet route heavy videos into a background job; it only makes the classification explicit and debuggable
+- for longer single-source videos, the product direction is shifting from "one reel suggestion" to "multiple distinct story candidates":
+  - for heavy clips, AI should be able to propose several clearly different reels from one source video
+  - these should be different narrative cuts, not tiny variations of the same cut
+  - the likely future presets for long-form sources are:
+    - one user-selected target length with multiple distinct reels
+    - or one AI-chosen best target length with multiple distinct reels
+  - avoid combinatorial explosion by not defaulting to "3 durations x 3 variants each"
+  - likely future long-form-friendly target lengths:
+    - `15s`
+    - `30s`
+    - `60s`
+  - long videos should emphasize distinct chapter/story extraction first, then reel generation second
 - remaining follow-up work for reel variants is:
   - make `Auto` smarter about content richness and pacing instead of relying on the current first-pass heuristic
   - improve `Custom range` so it picks stronger cuts inside user-provided windows such as:
@@ -423,6 +487,20 @@ Implemented in `apps/web`:
    - later personal score/rating filters for the user's own places
    - keep the mental model as "my travel memory explorer," not "public place reviews"
 18. The `/map` page now prefers the chosen reel preview or final rendered reel over raw source clips when one is available, and it forces an initial Leaflet relayout to avoid the blank white first paint.
+19. Design the heavy-video ingest lane before promising real long-form diving support:
+   - define thresholds for `light` vs `heavy` video handling
+   - start by testing server-side processing on `5m` to `15m` 4K files
+   - then validate `30m+` handling
+   - only after that move to realistic worst-case albums like `3 x 1h 4K` dive files plus drone/mobile footage
+   - make heavy analysis asynchronous with worker jobs, proxy generation, and timeline summaries instead of browser-only sampling
+20. Define the long-form reel business/product rule for heavy videos:
+   - for clips above the short-form threshold, do not stop at one reel suggestion
+   - generate multiple clearly different story candidates from the same source video
+   - keep those candidates non-overlapping enough to feel meaningfully different
+   - likely UX:
+     - user picks a target length and gets `3` distinct reels
+     - or AI picks one best target length and still gives `3` distinct reels
+   - reserve "all durations and all variants" for an advanced mode later
 
 ## Working Rules For Future Changes
 

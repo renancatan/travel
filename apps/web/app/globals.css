@@ -916,6 +916,16 @@ button {
   line-height: 1.4;
 }
 
+.processing-note-long_form {
+  border-color: rgba(191, 126, 41, 0.28);
+  background: rgba(191, 126, 41, 0.1);
+}
+
+.processing-note-heavy_async {
+  border-color: rgba(171, 60, 43, 0.3);
+  background: rgba(171, 60, 43, 0.1);
+}
+
 .map-shell .grid {
   align-items: stretch;
 }
@@ -1269,6 +1279,75 @@ button {
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.inline-video-preview {
+  width: 100%;
+  height: 100%;
+}
+
+.inline-video-preview,
+.inline-video-preview-fallback {
+  position: relative;
+}
+
+.inline-video-preview-fallback {
+  width: 100%;
+  height: 100%;
+}
+
+.inline-video-preview-fallback img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.inline-video-preview-empty {
+  width: 100%;
+  height: 100%;
+  padding: 18px;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  gap: 6px;
+  color: var(--ink);
+  background:
+    linear-gradient(180deg, rgba(20, 108, 106, 0.14), rgba(50, 95, 159, 0.1)),
+    #d8cfbf;
+}
+
+.inline-video-preview-empty strong {
+  font-size: 0.95rem;
+}
+
+.inline-video-preview-empty span {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.inline-video-preview-note {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+  border-radius: 14px;
+  background: rgba(19, 21, 24, 0.82);
+  color: #fff8ee;
+  backdrop-filter: blur(10px);
+}
+
+.inline-video-preview-note strong {
+  font-size: 12px;
+}
+
+.inline-video-preview-note span {
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .media-visual span {
