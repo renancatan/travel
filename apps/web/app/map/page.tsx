@@ -127,6 +127,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8
 const LEAFLET_STYLE_ID = "travel-leaflet-style";
 const LEAFLET_SCRIPT_ID = "travel-leaflet-script";
 const MAX_MAP_MEDIA = 8;
+const WORLD_MAP_BOUNDS: [[number, number], [number, number]] = [[-85, -180], [85, 180]];
 
 const MAP_ICON_EMOJI: Record<string, string> = {
   caves: "🕳️",
@@ -586,8 +587,11 @@ function LeafletMapSurface({
       scrollWheelZoom: true,
       attributionControl: true,
       preferCanvas: true,
+      maxBoundsViscosity: 0.9,
+      worldCopyJump: false,
     });
     map.setView([0, 0], 2, { animate: false });
+    map.setMaxBounds(window.L.latLngBounds(WORLD_MAP_BOUNDS));
 
     window.L.control.zoom({ position: "bottomright" }).addTo(map);
 
@@ -665,6 +669,9 @@ function LeafletMapSurface({
     }
 
     if (positionedAlbums.length === 0) {
+      map.setMaxBounds(window.L.latLngBounds(WORLD_MAP_BOUNDS));
+      map.setMinZoom(2);
+      map.setView([0, 0], 2, { animate: false });
       return;
     }
 
@@ -693,6 +700,51 @@ function LeafletMapSurface({
     });
 
     const selectedPoint = positionedAlbums.find(({ album }) => album.id === selectedAlbumId) ?? null;
+    const viewportContext = (() => {
+      if (!selectedPoint) {
+        return positionedAlbums;
+      }
+
+      const selectedCountry = selectedPoint.entry.country;
+      const selectedCity = selectedPoint.entry.city;
+      const sameCityAlbums =
+        selectedCountry && selectedCity
+          ? positionedAlbums.filter(
+              ({ entry }) => entry.country === selectedCountry && entry.city === selectedCity,
+            )
+          : [];
+      if (sameCityAlbums.length > 1) {
+        return sameCityAlbums;
+      }
+
+      const sameCountryAlbums = selectedCountry
+        ? positionedAlbums.filter(({ entry }) => entry.country === selectedCountry)
+        : [];
+      if (sameCountryAlbums.length > 0) {
+        return sameCountryAlbums;
+      }
+
+      return positionedAlbums;
+    })();
+    const viewportPoints = viewportContext.map(({ displayLatitude, displayLongitude }) => [
+      displayLatitude,
+      displayLongitude,
+    ]) as Array<[number, number]>;
+    const buildViewportBounds = (inputPoints: Array<[number, number]>, singlePointPadDegrees: number) => {
+      if (inputPoints.length === 1) {
+        const [latitude, longitude] = inputPoints[0];
+        return window.L.latLngBounds(
+          [latitude - singlePointPadDegrees, longitude - singlePointPadDegrees],
+          [latitude + singlePointPadDegrees, longitude + singlePointPadDegrees],
+        );
+      }
+      return window.L.latLngBounds(inputPoints);
+    };
+    const focusBounds = buildViewportBounds(viewportPoints, selectedPoint ? 0.18 : 0.35);
+    const constraintBounds = focusBounds.pad(selectedPoint ? 0.7 : 0.4);
+    map.setMaxBounds(constraintBounds);
+    const minZoom = Math.max(2, map.getBoundsZoom(constraintBounds, false) - (selectedPoint ? 1 : 0));
+    map.setMinZoom(Math.min(13, minZoom));
 
     if (selectedPoint) {
       selectedHaloRef.current = window.L.circleMarker(
@@ -716,14 +768,14 @@ function LeafletMapSurface({
     }
 
     if (points.length === 1) {
-      map.setView(points[0], 12, { animate: false });
+      map.fitBounds(focusBounds, { animate: false });
       requestAnimationFrame(() => {
         invalidateMapLayout();
       });
       return;
     }
 
-    map.fitBounds(window.L.latLngBounds(points).pad(0.2), { animate: false });
+    map.fitBounds(focusBounds.pad(0.18), { animate: false });
     requestAnimationFrame(() => {
       invalidateMapLayout();
     });

@@ -151,6 +151,10 @@
     - videos first
     - grouped by source video
     - images last
+- [x] Tune heavy long-form reels to stay video-first when the source is a real long video:
+  - for `45s+` reels built from `10m+` source clips, keep the large majority of the runtime on video
+  - cap supporting image beats so they stay quick instead of stretching into `6s+` holds
+  - validated against the saved Pamilacan `27m` dive album at roughly `54s` video / `6s` images for `60s` variants
 - [ ] Revisit the reel-variant UX:
   - keep variant selection lightweight before showing deeper editing
   - the compare-first flow works now, but the overall target-to-variant-to-editor progression can still be simplified
@@ -164,6 +168,7 @@
 ## Small UI fixes
 
 - [x] Fix duplicate image filename display on media cards.
+- [x] Fix media-card overflow for long filenames and AI analysis / processing notes.
 - [ ] Revisit reel draft save UX:
   - decide whether `Save as version` should also apply/save the active draft edits
   - decide whether `Apply draft edits` should stay separate or be merged into a simpler action model
@@ -238,6 +243,9 @@
     - chosen/final reel
     - source videos and images
   - keep filters light and useful without letting the map get boxed in again
+- [x] Keep the map camera constrained to the currently visited selection context:
+  - when a stop is selected, clamp panning/zoom-out around that stop's city/country cluster
+  - avoid dropping the user into empty world space after a small scroll or zoom gesture
   - optionally expose the chosen compare-reel preview on the map even before a final reel export exists, if we want map cards to mirror the editor selection even more closely
   - keep testing first-load behavior so the basemap never appears as a blank/white surface before the first interaction
   - keep selected compare-reel reopening deterministic for older saved map entries that were created before `selected_reel_variant_id` was stored

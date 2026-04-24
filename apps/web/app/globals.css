@@ -207,6 +207,7 @@ button {
 
 .surface {
   padding: 22px;
+  min-width: 0;
 }
 
 .stack {
@@ -910,10 +911,17 @@ button {
   padding: 12px;
 }
 
+.ai-inline-note strong,
 .ai-inline-note span {
+  display: block;
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ai-inline-note strong {
+  color: var(--ink);
 }
 
 .processing-note-long_form {
@@ -1359,6 +1367,7 @@ button {
   padding: 14px;
   display: grid;
   gap: 10px;
+  min-width: 0;
 }
 
 .media-card-header {
@@ -1366,6 +1375,17 @@ button {
   justify-content: space-between;
   gap: 10px;
   align-items: flex-start;
+  min-width: 0;
+}
+
+.media-card-header strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.media-card-header button {
+  flex-shrink: 0;
 }
 
 .meta-grid {

@@ -1053,6 +1053,17 @@ class AlbumSuggestionService:
             reel_candidates,
             media_by_id=media_by_id,
         )
+        prioritize_video_story = self._should_prioritize_video_story(
+            media_by_id,
+            target_duration_seconds=target_duration_seconds,
+        )
+        effective_max_video_steps = max_video_steps
+        if prioritize_video_story:
+            effective_max_video_steps = (
+                len(role_specs)
+                if max_video_steps is None
+                else max(int(max_video_steps), max(1, len(role_specs) - 1))
+            )
 
         used_still_media_ids: set[str] = set()
         video_use_counts: dict[str, int] = {}
@@ -1060,7 +1071,7 @@ class AlbumSuggestionService:
         video_steps_selected = 0
         steps: list[dict[str, Any]] = []
         for spec in role_specs:
-            avoid_video = max_video_steps is not None and video_steps_selected >= max_video_steps
+            avoid_video = effective_max_video_steps is not None and video_steps_selected >= effective_max_video_steps
             candidate, source_role = self._pick_candidate_for_reel_role(
                 ordered_candidates,
                 media_by_id=media_by_id,
@@ -1074,6 +1085,7 @@ class AlbumSuggestionService:
                 preferred_use_cases=set(spec["preferred_use_cases"]),
                 scene_keywords=set(spec["scene_keywords"]),
                 avoid_video=avoid_video,
+                prefer_video_story=prioritize_video_story,
             )
             if candidate is None:
                 continue
@@ -1133,6 +1145,7 @@ class AlbumSuggestionService:
             steps,
             media_by_id=media_by_id,
             target_duration_seconds=target_duration_seconds,
+            prioritize_video_story=prioritize_video_story,
         )
         estimated_total_duration_seconds = round(
             sum(float(step["suggested_duration_seconds"]) for step in retimed_steps),
@@ -1152,6 +1165,7 @@ class AlbumSuggestionService:
         *,
         media_by_id: dict[str, dict[str, Any]],
         target_duration_seconds: float,
+        prioritize_video_story: bool = False,
     ) -> list[dict[str, Any]]:
         if not steps:
             return []
@@ -1161,6 +1175,38 @@ class AlbumSuggestionService:
             return steps
 
         scale = target_duration_seconds / base_total
+        timing_targets = self._build_video_first_timing_targets(
+            steps,
+            media_by_id=media_by_id,
+            target_duration_seconds=target_duration_seconds,
+            prioritize_video_story=prioritize_video_story,
+        )
+        base_video_total = sum(
+            float(step.get("suggested_duration_seconds") or 0.0)
+            for step in steps
+            if str(step.get("media_kind") or "") == "video"
+        )
+        base_still_total = max(0.0, base_total - base_video_total)
+        video_scale = scale
+        still_scale = scale
+
+        if timing_targets is not None and base_video_total > 0:
+            desired_still_total = min(
+                timing_targets["max_total_still_duration"],
+                base_still_total * scale if base_still_total > 0 else 0.0,
+            )
+            desired_video_total = max(
+                timing_targets["min_total_video_duration"],
+                target_duration_seconds - desired_still_total,
+            )
+            remaining_target = max(0.0, target_duration_seconds - desired_video_total)
+            desired_still_total = min(desired_still_total, remaining_target)
+            video_scale = desired_video_total / base_video_total
+            if base_still_total > 0:
+                still_scale = desired_still_total / base_still_total
+            else:
+                still_scale = 1.0
+
         retimed_steps: list[dict[str, Any]] = []
         video_use_counts: dict[str, int] = {}
 
@@ -1172,8 +1218,10 @@ class AlbumSuggestionService:
                 continue
 
             next_step = dict(step)
-            scaled_duration = round(max(0.3, float(step.get("suggested_duration_seconds") or 0.0) * scale), 1)
-            if str(step.get("media_kind") or "") == "video":
+            media_kind = str(step.get("media_kind") or "")
+            step_scale = video_scale if media_kind == "video" else still_scale
+            scaled_duration = round(max(0.3, float(step.get("suggested_duration_seconds") or 0.0) * step_scale), 1)
+            if media_kind == "video":
                 usage_index = video_use_counts.get(media_id, 0)
                 clip_start_seconds = self._to_float(step.get("clip_start_seconds"))
                 normalized_start, normalized_end = self._normalize_video_window(
@@ -1188,8 +1236,13 @@ class AlbumSuggestionService:
                 next_step["clip_end_seconds"] = normalized_end
                 next_step["suggested_duration_seconds"] = round(max(0.3, normalized_end - normalized_start), 1)
             else:
+                still_step_cap = (
+                    timing_targets["max_still_step_duration"]
+                    if timing_targets is not None
+                    else self.max_reel_clip_duration_seconds
+                )
                 next_step["suggested_duration_seconds"] = round(
-                    min(self.max_reel_clip_duration_seconds, max(0.5, scaled_duration)),
+                    min(still_step_cap, self.max_reel_clip_duration_seconds, max(0.5, scaled_duration)),
                     1,
                 )
 
@@ -1202,6 +1255,48 @@ class AlbumSuggestionService:
             }
             for index, step in enumerate(retimed_steps)
         ]
+
+    def _build_video_first_timing_targets(
+        self,
+        steps: list[dict[str, Any]],
+        *,
+        media_by_id: dict[str, dict[str, Any]],
+        target_duration_seconds: float,
+        prioritize_video_story: bool,
+    ) -> dict[str, float] | None:
+        if not prioritize_video_story or target_duration_seconds < 45.0:
+            return None
+
+        video_steps = [step for step in steps if str(step.get("media_kind") or "") == "video"]
+        still_steps = [step for step in steps if str(step.get("media_kind") or "") == "image"]
+        if not video_steps:
+            return None
+
+        max_single_video_duration = max(
+            (
+                max(0.0, float(media_by_id.get(str(step.get("media_id") or ""), {}).get("duration_seconds") or 0.0))
+                for step in video_steps
+            ),
+            default=0.0,
+        )
+        if max_single_video_duration < 600.0:
+            return None
+
+        max_still_step_duration = round(min(3.0, max(1.8, target_duration_seconds * 0.05)), 1)
+        minimum_video_share = 0.84 if target_duration_seconds >= 55.0 else 0.8
+        max_total_still_duration = round(
+            min(
+                target_duration_seconds * (1.0 - minimum_video_share),
+                len(still_steps) * max_still_step_duration,
+            ),
+            1,
+        )
+
+        return {
+            "max_still_step_duration": max_still_step_duration,
+            "max_total_still_duration": max_total_still_duration,
+            "min_total_video_duration": round(max(0.0, target_duration_seconds - max_total_still_duration), 1),
+        }
 
     @staticmethod
     def _group_reel_steps_by_media_flow(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -2211,6 +2306,7 @@ class AlbumSuggestionService:
         preferred_use_cases: set[str],
         scene_keywords: set[str],
         avoid_video: bool = False,
+        prefer_video_story: bool = False,
     ) -> tuple[dict[str, Any] | None, str]:
         if avoid_video:
             still_candidate = self._pick_still_candidate_for_role(
@@ -2266,6 +2362,7 @@ class AlbumSuggestionService:
             preferred_use_cases=preferred_use_cases,
             scene_keywords=scene_keywords,
             role=role,
+            prefer_video_story=prefer_video_story,
         )
         if candidate is None and avoid_video:
             candidate = self._pick_reel_plan_candidate(
@@ -2277,6 +2374,7 @@ class AlbumSuggestionService:
                 preferred_use_cases=preferred_use_cases,
                 scene_keywords=scene_keywords,
                 role=role,
+                prefer_video_story=prefer_video_story,
             )
         if candidate is None:
             return None, "still_image"
@@ -2357,6 +2455,7 @@ class AlbumSuggestionService:
         preferred_use_cases: set[str],
         scene_keywords: set[str],
         role: str,
+        prefer_video_story: bool = False,
     ) -> dict[str, Any] | None:
         best_candidate: dict[str, Any] | None = None
         best_rank: tuple[float, int] | None = None
@@ -2382,6 +2481,11 @@ class AlbumSuggestionService:
                 rank += 8
             if any(keyword in scene_guess for keyword in scene_keywords):
                 rank += 5
+            if prefer_video_story:
+                if media_kind == "video":
+                    rank += 10
+                elif media_kind == "image":
+                    rank -= 4
 
             if role == "Hook" and media_kind == "video":
                 rank += 4
@@ -2400,6 +2504,36 @@ class AlbumSuggestionService:
                 best_candidate = candidate
 
         return best_candidate
+
+    def _should_prioritize_video_story(
+        self,
+        media_by_id: dict[str, dict[str, Any]],
+        *,
+        target_duration_seconds: float,
+    ) -> bool:
+        if target_duration_seconds < 45.0:
+            return False
+
+        for media_item in media_by_id.values():
+            if str(media_item.get("media_kind") or "") != "video":
+                continue
+
+            duration_seconds = self._to_float(media_item.get("duration_seconds")) or 0.0
+            if duration_seconds >= 600.0:
+                return True
+
+            if bool(media_item.get("is_heavy_video")):
+                return True
+
+            processing_profile = str(media_item.get("processing_profile") or "")
+            if processing_profile == "heavy_async":
+                return True
+
+            duration_tier = str(media_item.get("video_duration_tier") or "")
+            if duration_tier in {"heavy", "very_long"}:
+                return True
+
+        return False
 
     def _select_video_clip_window(
         self,

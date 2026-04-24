@@ -207,10 +207,21 @@ Implemented in `apps/web`:
 - long-form auto reel variants no longer collapse to a single compare reel as easily:
   - creative profiles now carry a clip-window offset so `Balanced`, `Motion-first`, and `Scenic` can land on different windows from the same long source video
   - this keeps heavy single-video albums closer to the intended "three distinct story candidates" behavior
+- heavy long-form reels now bias much harder toward video when the source is a truly long clip:
+  - for `45s+` reels built from `10m+` videos, the planner now prefers video candidates more aggressively
+  - retiming now caps still-image beats to quick support shots instead of letting them stretch into long holds
+  - the saved Pamilacan `27m` dive album now validates around `53.8s` video and `5.7s` to `6.0s` images on the generated `60s` variants
 - map place matching is now stricter and safer:
   - place hints now match normalized tokens instead of loose substrings, so album names like `petar50` no longer accidentally trigger the `petar` location hint
   - invalid `0,0` style GPS metadata is ignored instead of counting as real coordinates
   - `Pamilacan` now has a curated place hint so prompt + filenames can resolve to a stable Bohol/Visayas location even without trustworthy media GPS
+- the main media review grid now handles long filenames and AI notes more gracefully:
+  - long media names wrap instead of forcing the card wider than the workspace
+  - AI analysis and processing-note text now wraps instead of clipping off-screen in the right panel
+- the `/map` viewport now stays anchored to the visited context:
+  - empty-map-space drift is reduced by constraining panning/zoom-out to the active visited bounds
+  - when a stop is selected, the bounds focus on that stop's city cluster when possible, otherwise its country cluster
+  - this keeps country-level browsing much closer to the intended "walk around where we've actually been" behavior
 
 ## Current State
 
@@ -218,6 +229,10 @@ Implemented in `apps/web`:
 
 - API smoke test passes
 - Next.js production build passes
+- the heavy-video reel tuning currently validates on the saved Pamilacan album:
+  - `auto-60-0-balanced`: `53.8s` video / `5.7s` image
+  - `auto-60-0-motion`: `53.8s` video / `5.7s` image
+  - `auto-60-0-scenic`: `53.9s` video / `6.0s` image
 - album creation, upload, description generation, description save, and AI review all work end to end
 - local reel rendering now works end to end on this machine with installed `ffmpeg`
 - local reel rendering now exports a final `.mp4` with both H.264 video and AAC audio when the draft includes video beats
