@@ -902,6 +902,105 @@ button {
   gap: 12px;
 }
 
+.reel-frame-gallery-panel {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 14px;
+}
+
+.reel-frame-gallery-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.reel-frame-gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.reel-frame-card {
+  padding: 8px;
+  display: grid;
+  gap: 8px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.8);
+  text-align: left;
+}
+
+.reel-frame-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  display: block;
+  border-radius: 12px;
+}
+
+.reel-frame-card span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.frame-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  padding: 24px;
+  display: grid;
+  place-items: center;
+  background: rgba(18, 14, 10, 0.78);
+  backdrop-filter: blur(8px);
+}
+
+.frame-lightbox-card {
+  width: min(960px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 250, 241, 0.96);
+  box-shadow: var(--shadow);
+}
+
+.frame-lightbox-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.frame-lightbox-meta {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.frame-lightbox-meta span {
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.frame-lightbox-card img {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 18px;
+  background: #ece3d6;
+}
+
 .ai-inline-note {
   display: grid;
   gap: 4px;
@@ -1422,6 +1521,10 @@ button {
     grid-template-columns: 1fr;
   }
 
+  .reel-frame-gallery-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
   .sidebar {
     position: static;
   }
@@ -1469,7 +1572,8 @@ button {
   .draft-step-meta,
   .reel-plan-header,
   .reel-plan-step-header,
-  .map-live-header {
+  .map-live-header,
+  .frame-lightbox-header {
     flex-direction: column;
   }
 
@@ -1500,5 +1604,13 @@ button {
 
   .map-media-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .reel-frame-gallery-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .frame-lightbox {
+    padding: 14px;
   }
 }

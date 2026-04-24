@@ -155,6 +155,12 @@
   - for `45s+` reels built from `10m+` source clips, keep the large majority of the runtime on video
   - cap supporting image beats so they stay quick instead of stretching into `6s+` holds
   - validated against the saved Pamilacan `27m` dive album at roughly `54s` video / `6s` images for `60s` variants
+- [x] Add a lightweight best-frame gallery for videos longer than `1m`:
+  - extracts `10` still frames from the current reel windows without needing a full extra reel render
+  - shows them as a compact open/close contact-sheet grid instead of a long vertical stack
+  - allows expanding one frame plus downloading one frame or the whole extracted set
+  - first shipped UX is anchored to the selected reel / current reel workspace, which keeps the stills tied to the story the user chose
+  - likely follow-up: offer an optional album-wide or full-source "top frames" mode as a secondary action later
 - [ ] Revisit the reel-variant UX:
   - keep variant selection lightweight before showing deeper editing
   - the compare-first flow works now, but the overall target-to-variant-to-editor progression can still be simplified

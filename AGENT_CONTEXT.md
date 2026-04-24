@@ -211,6 +211,12 @@ Implemented in `apps/web`:
   - for `45s+` reels built from `10m+` videos, the planner now prefers video candidates more aggressively
   - retiming now caps still-image beats to quick support shots instead of letting them stretch into long holds
   - the saved Pamilacan `27m` dive album now validates around `53.8s` video and `5.7s` to `6.0s` images on the generated `60s` variants
+- long videos now have a lightweight extracted-frame gallery tied to the reel workspace:
+  - videos longer than roughly `1m` can now expose a `10`-frame contact sheet under the reel area
+  - the gallery is collapsible, opens in a compact grid, supports single-frame expansion, and allows download-one / download-all
+  - the first shipped UX intentionally anchors those frames to the selected reel or current reel workspace instead of scanning the whole source video blindly
+  - the backend extracts cached JPEGs plus a downloadable zip from the chosen reel windows, so this stays much lighter than generating another reel
+  - a future secondary mode can still expose album-wide or full-video top frames when broader exploration becomes worth it
 - map place matching is now stricter and safer:
   - place hints now match normalized tokens instead of loose substrings, so album names like `petar50` no longer accidentally trigger the `petar` location hint
   - invalid `0,0` style GPS metadata is ignored instead of counting as real coordinates
@@ -407,6 +413,10 @@ Implemented in `apps/web`:
   - likely direction is still to simplify the post-selection flow even though deeper editing is now delayed until one variant is clearly chosen
 - longer hero-video variants now try to spread reused clips across distinct non-overlapping windows instead of repeating the same slice when one strong video is reused several times
 - longer variants also now lean on a broader candidate pool and can switch into more still-heavy storytelling instead of overusing one hero video
+- long videos now have a user-facing "best extracted frames" gallery:
+  - it lives under the reel area as a collapsible contact sheet instead of a long list
+  - it works from the current reel workspace, including the saved/edited draft path, not only from a compare card
+  - this is especially useful for dive and drone footage where users often want stills pulled from the chosen video story
 - the current fixed variant presets now live in one backend file for easier future tuning:
   - [services/api/app/core/reel_variant_presets.py](/home/renancatan/renan/projects/travel/services/api/app/core/reel_variant_presets.py)
 - the reel-variant rules are now explicitly split into short-form and long-form policies:
@@ -516,6 +526,10 @@ Implemented in `apps/web`:
      - user picks a target length and gets `3` distinct reels
      - or AI picks one best target length and still gives `3` distinct reels
    - reserve "all durations and all variants" for an advanced mode later
+21. Extend the lightweight long-video frame gallery:
+   - keep the current compact contact-sheet grid tied to the active reel workspace
+   - consider a secondary "full source top frames" mode only if users need broader exploration beyond the chosen story
+   - keep download-one / download-all lightweight and avoid turning this into another heavy render workflow
 
 ## Working Rules For Future Changes
 

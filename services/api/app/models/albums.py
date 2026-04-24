@@ -90,6 +90,12 @@ class SaveReelDraftVersionRequest(BaseModel):
     reel_draft: ReelDraftEditInput
 
 
+class GenerateReelFrameGalleryRequest(BaseModel):
+    source_variant_id: str | None = Field(default=None, max_length=120)
+    frame_count: int = Field(default=10, ge=4, le=20)
+    reel_draft: ReelDraftEditInput | None = None
+
+
 class MediaItemResponse(BaseModel):
     id: str
     album_id: str
@@ -139,6 +145,28 @@ class RenderedReelResponse(BaseModel):
     fps: int
     estimated_total_duration_seconds: float
     video_strategy: str
+
+
+class ReelFrameGalleryFrameResponse(BaseModel):
+    frame_id: str
+    frame_number: int
+    media_id: str
+    original_filename: str
+    role: str
+    source_timestamp_seconds: float
+    clip_start_seconds: float | None = None
+    clip_end_seconds: float | None = None
+    content_type: str = "image/jpeg"
+    relative_path: str
+
+
+class ReelFrameGalleryResponse(BaseModel):
+    gallery_id: str
+    source_variant_id: str | None = None
+    source_draft_name: str
+    frame_count: int
+    download_relative_path: str
+    frames: list[ReelFrameGalleryFrameResponse]
 
 
 class MapEntryResponse(BaseModel):

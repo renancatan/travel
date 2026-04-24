@@ -16,12 +16,15 @@ from services.api.app.core.media_metadata import (
     build_media_metadata_from_file,
     enrich_saved_media_metadata,
 )
+from services.api.app.core.reel_frame_gallery import ReelFrameGalleryError, ReelFrameGalleryService
 from services.api.app.core.reel_renderer import ReelRenderError, ReelRenderer
 from services.api.app.models.albums import (
     AlbumResponse,
     MediaItemResponse,
     UploadAnalysisFramesRequest,
     CreateAlbumRequest,
+    GenerateReelFrameGalleryRequest,
+    ReelFrameGalleryResponse,
     GenerateAlbumDescriptionResponse,
     GenerateMapEntryRequest,
     UpdateMapEntryRequest,
@@ -38,6 +41,7 @@ repository = FileRepository()
 suggestion_service = AlbumSuggestionService()
 map_entry_service = MapEntrySuggestionService()
 reel_renderer = ReelRenderer()
+reel_frame_gallery_service = ReelFrameGalleryService()
 logger = logging.getLogger(__name__)
 
 
@@ -273,6 +277,68 @@ def get_rendered_variant_content(album_id: str, variant_id: str) -> FileResponse
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
+
+
+@router.post("/{album_id}/reel-frame-gallery", response_model=ReelFrameGalleryResponse)
+def generate_reel_frame_gallery(
+    album_id: str,
+    request: GenerateReelFrameGalleryRequest | None = Body(default=None),
+) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
+    reel_draft = _resolve_reel_frame_gallery_draft(
+        album,
+        cached_suggestion,
+        request=request,
+    )
+
+    try:
+        return reel_frame_gallery_service.build_gallery(
+            album,
+            reel_draft,
+            source_variant_id=request.source_variant_id if request else None,
+            frame_count=request.frame_count if request else 10,
+        )
+    except ReelFrameGalleryError as exc:
+        message = str(exc)
+        status_code = status.HTTP_409_CONFLICT if "ffmpeg" in message.lower() else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+
+@router.get("/{album_id}/reel-frame-galleries/{gallery_id}/frames/{frame_id}")
+def get_reel_frame_gallery_frame(album_id: str, gallery_id: str, frame_id: str) -> FileResponse:
+    try:
+        frame, frame_path = reel_frame_gallery_service.get_gallery_frame_path(album_id, gallery_id, frame_id)
+    except ReelFrameGalleryError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    filename_stem = re.sub(
+        r"[^A-Za-z0-9._-]+",
+        "_",
+        str(frame.get("original_filename") or frame_id),
+    ).strip("._") or frame_id
+    return FileResponse(
+        path=frame_path,
+        media_type=str(frame.get("content_type") or "image/jpeg"),
+        filename=f"{filename_stem}-{frame_id}.jpg",
+    )
+
+
+@router.get("/{album_id}/reel-frame-galleries/{gallery_id}/download")
+def download_reel_frame_gallery(album_id: str, gallery_id: str) -> FileResponse:
+    try:
+        download_path = reel_frame_gallery_service.get_gallery_download_path(album_id, gallery_id)
+    except ReelFrameGalleryError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=download_path,
+        media_type="application/zip",
+        filename=download_path.name,
+    )
 
 
 @router.post("/{album_id}/media/{media_id}/analysis-frames", response_model=MediaItemResponse)
@@ -684,3 +750,51 @@ def _build_variant_render_draft_name(album: dict, variant_id: str) -> str:
     album_slug = re.sub(r"[^a-z0-9]+", "-", str(album.get("name") or "album").lower()).strip("-") or "album"
     variant_slug = re.sub(r"[^a-z0-9]+", "-", variant_id.lower()).strip("-") or "variant"
     return f"{album_slug}-{variant_slug}-compare"
+
+
+def _resolve_reel_frame_gallery_draft(
+    album: dict,
+    cached_suggestion: dict,
+    *,
+    request: GenerateReelFrameGalleryRequest | None,
+) -> dict:
+    existing_draft = _resolve_reel_frame_gallery_existing_draft(cached_suggestion, request=request)
+    if request is not None and request.reel_draft is not None:
+        return suggestion_service.rebuild_reel_draft(
+            album,
+            request.reel_draft.model_dump(),
+            existing_draft=existing_draft,
+        )
+
+    if existing_draft is not None:
+        return existing_draft
+
+    reel_draft = cached_suggestion.get("reel_draft")
+    if not isinstance(reel_draft, dict):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This album does not have a reel draft yet.")
+    return reel_draft
+
+
+def _resolve_reel_frame_gallery_existing_draft(
+    cached_suggestion: dict,
+    *,
+    request: GenerateReelFrameGalleryRequest | None,
+) -> dict | None:
+    source_variant_id = str(request.source_variant_id or "").strip() if request is not None else ""
+    if source_variant_id:
+        reel_draft_variants = cached_suggestion.get("reel_draft_variants")
+        if not isinstance(reel_draft_variants, list):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No AI reel variants are available yet.")
+        for variant in reel_draft_variants:
+            if not isinstance(variant, dict):
+                continue
+            if str(variant.get("variant_id") or "").strip() != source_variant_id:
+                continue
+            reel_draft = variant.get("reel_draft")
+            if isinstance(reel_draft, dict):
+                return reel_draft
+            break
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Chosen reel variant was not found.")
+
+    reel_draft = cached_suggestion.get("reel_draft")
+    return reel_draft if isinstance(reel_draft, dict) else None

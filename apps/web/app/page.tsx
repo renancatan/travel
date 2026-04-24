@@ -266,6 +266,28 @@ type RenderedVariant = {
   video_strategy: string;
 };
 
+type ReelFrameGalleryFrame = {
+  frame_id: string;
+  frame_number: number;
+  media_id: string;
+  original_filename: string;
+  role: string;
+  source_timestamp_seconds: number;
+  clip_start_seconds: number | null;
+  clip_end_seconds: number | null;
+  content_type: string;
+  relative_path: string;
+};
+
+type ReelFrameGallery = {
+  gallery_id: string;
+  source_variant_id: string | null;
+  source_draft_name: string;
+  frame_count: number;
+  download_relative_path: string;
+  frames: ReelFrameGalleryFrame[];
+};
+
 type ReelDraftVariant = {
   variant_id: string;
   label: string;
@@ -678,6 +700,24 @@ function getRenderedVariantContentUrl(album: Album | null, renderedVariant: Rend
   return `${API_BASE_URL}/albums/${album.id}/rendered-variants/${renderedVariant.variant_id}/content?v=${cacheKey}`;
 }
 
+function getReelFrameGalleryFrameUrl(
+  album: Album | null,
+  gallery: ReelFrameGallery | null,
+  frame: ReelFrameGalleryFrame | null,
+): string | null {
+  if (!album || !gallery || !frame) {
+    return null;
+  }
+  return `${API_BASE_URL}/albums/${album.id}/reel-frame-galleries/${gallery.gallery_id}/frames/${frame.frame_id}`;
+}
+
+function getReelFrameGalleryDownloadUrl(album: Album | null, gallery: ReelFrameGallery | null): string | null {
+  if (!album || !gallery) {
+    return null;
+  }
+  return `${API_BASE_URL}/albums/${album.id}/reel-frame-galleries/${gallery.gallery_id}/download`;
+}
+
 function getMediaContentUrl(mediaItem: MediaItem | null): string | null {
   if (!mediaItem) {
     return null;
@@ -823,6 +863,25 @@ function cloneReelDraft(draft: ReelDraft | null | undefined): ReelDraft | null {
     return null;
   }
   return JSON.parse(JSON.stringify(draft)) as ReelDraft;
+}
+
+function buildReelFrameGallerySignature(sourceVariantId: string | null, draft: ReelDraft | null | undefined): string {
+  if (!draft) {
+    return "";
+  }
+  return JSON.stringify({
+    sourceVariantId: sourceVariantId ?? "__current__",
+    draftName: draft.draft_name,
+    videoSteps: draft.steps
+      .filter((step) => step.media_kind === "video")
+      .map((step) => ({
+        media_id: step.media_id,
+        role: step.role,
+        clip_start_seconds: step.clip_start_seconds,
+        clip_end_seconds: step.clip_end_seconds,
+        suggested_duration_seconds: step.suggested_duration_seconds,
+      })),
+  });
 }
 
 function buildReelDraftEditPayload(draft: ReelDraft) {
@@ -1206,6 +1265,12 @@ export default function Page() {
   const [editableReelDraft, setEditableReelDraft] = useState<ReelDraft | null>(null);
   const [selectedEditorVariantId, setSelectedEditorVariantId] = useState<string | null>(null);
   const [isRenderingVariantSet, setIsRenderingVariantSet] = useState(false);
+  const [isReelFrameGalleryOpen, setIsReelFrameGalleryOpen] = useState(false);
+  const [isLoadingReelFrameGallery, setIsLoadingReelFrameGallery] = useState(false);
+  const [reelFrameGallery, setReelFrameGallery] = useState<ReelFrameGallery | null>(null);
+  const [reelFrameGalleryError, setReelFrameGalleryError] = useState<string | null>(null);
+  const [loadedReelFrameGallerySignature, setLoadedReelFrameGallerySignature] = useState("");
+  const [expandedReelFrame, setExpandedReelFrame] = useState<ReelFrameGalleryFrame | null>(null);
   const [isGeneratingMapEntry, setIsGeneratingMapEntry] = useState(false);
   const [isSavingMapEntry, setIsSavingMapEntry] = useState(false);
   const [mapGenerationMode, setMapGenerationMode] = useState<MapGenerationMode | null>(null);
@@ -1262,6 +1327,7 @@ export default function Page() {
     albumMode === "new" && !newAlbumId && name.trim()
       ? albums.find((album) => normalizeAlbumName(album.name) === normalizeAlbumName(name))
       : null;
+  const reelFrameGallerySignature = buildReelFrameGallerySignature(selectedEditorVariantId, workingReelDraft);
   const gpsMediaItems = getGpsMediaItems(workflowAlbum);
   const chosenReelMediaIds = extractReelDraftSelectedMediaIds(workingReelDraft);
   const chosenReelMediaLabels = chosenReelMediaIds
@@ -1283,6 +1349,25 @@ export default function Page() {
         .filter((value): value is string => Boolean(value && value.trim()))
         .join(" / ")
     : "";
+  const hasLongSourceVideoInChosenReel = Boolean(
+    workingReelDraft &&
+      workingReelDraft.steps.some((step) => {
+        if (step.media_kind !== "video") {
+          return false;
+        }
+        const mediaItem = getWorkflowMediaItem(step.media_id);
+        const durationSeconds = getMediaDurationSeconds(mediaItem);
+        return durationSeconds !== null && durationSeconds > 60;
+      }),
+  );
+  const showReelFrameGalleryPanel = Boolean(workingReelDraft && hasLongSourceVideoInChosenReel);
+  const isReelFrameGalleryStale = Boolean(
+    reelFrameGallery &&
+      loadedReelFrameGallerySignature &&
+      reelFrameGallerySignature &&
+      loadedReelFrameGallerySignature !== reelFrameGallerySignature,
+  );
+  const expandedReelFrameUrl = getReelFrameGalleryFrameUrl(workflowAlbum, reelFrameGallery, expandedReelFrame);
 
   function clearUploadSelection() {
     const fileInput = document.getElementById("upload-input") as HTMLInputElement | null;
@@ -1990,6 +2075,26 @@ export default function Page() {
     setMapGenerationMode(inferMapGenerationMode(workflowAlbum?.map_entry));
     setMapPrompt(workflowAlbum?.map_entry?.generation_prompt ?? "");
   }, [workflowAlbum?.id]);
+
+  useEffect(() => {
+    setIsReelFrameGalleryOpen(false);
+    setIsLoadingReelFrameGallery(false);
+    setReelFrameGallery(null);
+    setReelFrameGalleryError(null);
+    setLoadedReelFrameGallerySignature("");
+    setExpandedReelFrame(null);
+  }, [workflowAlbum?.id, selectedEditorVariantId]);
+
+  useEffect(() => {
+    if (hasLongSourceVideoInChosenReel) {
+      return;
+    }
+    setIsReelFrameGalleryOpen(false);
+    setReelFrameGallery(null);
+    setReelFrameGalleryError(null);
+    setLoadedReelFrameGallerySignature("");
+    setExpandedReelFrame(null);
+  }, [hasLongSourceVideoInChosenReel]);
 
   useEffect(() => {
     if (!workflowAlbum) {
@@ -3152,6 +3257,108 @@ export default function Page() {
     });
   }
 
+  async function loadReelFrameGallery(options?: { openAfterLoad?: boolean }) {
+    if (!workflowAlbum || !workingReelDraft) {
+      setReelFrameGalleryError("Choose or open one reel first before extracting frames.");
+      return;
+    }
+
+    setIsLoadingReelFrameGallery(true);
+    setReelFrameGalleryError(null);
+
+    const sourceVariantId =
+      selectedEditorVariantId && selectedEditorVariantId !== "__saved_version__" ? selectedEditorVariantId : null;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/reel-frame-gallery`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          frame_count: 10,
+          ...(sourceVariantId ? { source_variant_id: sourceVariantId } : {}),
+          ...buildReelDraftEditPayload(workingReelDraft),
+        }),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not extract reel frames (${response.status})`);
+      }
+
+      const data = (await response.json()) as ReelFrameGallery;
+      setReelFrameGallery(data);
+      setLoadedReelFrameGallerySignature(reelFrameGallerySignature);
+      setExpandedReelFrame(null);
+      if (options?.openAfterLoad ?? true) {
+        setIsReelFrameGalleryOpen(true);
+      }
+    } catch (error) {
+      setReelFrameGalleryError(error instanceof Error ? error.message : "Could not extract reel frames.");
+      if (options?.openAfterLoad ?? true) {
+        setIsReelFrameGalleryOpen(true);
+      }
+    } finally {
+      setIsLoadingReelFrameGallery(false);
+    }
+  }
+
+  function handleToggleReelFrameGallery() {
+    if (isReelFrameGalleryOpen) {
+      setIsReelFrameGalleryOpen(false);
+      return;
+    }
+
+    if (!reelFrameGallery || isReelFrameGalleryStale) {
+      void loadReelFrameGallery({ openAfterLoad: true });
+      return;
+    }
+
+    setReelFrameGalleryError(null);
+    setIsReelFrameGalleryOpen(true);
+  }
+
+  function handleDownloadReelFrameGallery() {
+    if (!workflowAlbum || !reelFrameGallery) {
+      setReelFrameGalleryError("Extract frames first before downloading the full set.");
+      return;
+    }
+
+    const downloadUrl = getReelFrameGalleryDownloadUrl(workflowAlbum, reelFrameGallery);
+    if (!downloadUrl) {
+      setReelFrameGalleryError("Frame gallery download is not ready yet.");
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = `${reelFrameGallery.source_draft_name}-frames.zip`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
+  function handleDownloadReelFrame(frame: ReelFrameGalleryFrame) {
+    if (!workflowAlbum || !reelFrameGallery) {
+      setReelFrameGalleryError("Extract frames first before downloading one.");
+      return;
+    }
+
+    const frameUrl = getReelFrameGalleryFrameUrl(workflowAlbum, reelFrameGallery, frame);
+    if (!frameUrl) {
+      setReelFrameGalleryError("This frame is not available to download yet.");
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.href = frameUrl;
+    link.download = `${frame.original_filename}-${frame.frame_id}.jpg`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+
   function getInsightForMedia(mediaId: string): MediaInsight | null {
     return activeSuggestions?.media_insights.find((insight) => insight.media_id === mediaId) ?? null;
   }
@@ -4128,6 +4335,88 @@ export default function Page() {
                           <p>No AI reel variants yet.</p>
                         )}
                       </div>
+                      {showReelFrameGalleryPanel ? (
+                        <div className="ai-card ai-card-wide">
+                          <div className="reel-frame-gallery-panel">
+                            <div className="reel-plan-header">
+                              <div>
+                                <strong>Selected reel frames</strong>
+                                <p>
+                                  Pull 10 stills from the current reel windows. This keeps the gallery tied to the story you
+                                  picked instead of scanning the whole source video blindly.
+                                </p>
+                              </div>
+                              <div className="actions">
+                                <button
+                                  className="button-secondary button-chip"
+                                  disabled={isLoadingReelFrameGallery}
+                                  onClick={handleToggleReelFrameGallery}
+                                  type="button"
+                                >
+                                  {isLoadingReelFrameGallery
+                                    ? "Extracting frames..."
+                                    : isReelFrameGalleryOpen
+                                      ? "Hide frames"
+                                      : "Open frames"}
+                                </button>
+                                {isReelFrameGalleryOpen ? (
+                                  <button
+                                    className="button-secondary button-chip"
+                                    disabled={isLoadingReelFrameGallery}
+                                    onClick={() => void loadReelFrameGallery({ openAfterLoad: true })}
+                                    type="button"
+                                  >
+                                    Refresh frames
+                                  </button>
+                                ) : null}
+                                {reelFrameGallery && !isReelFrameGalleryStale ? (
+                                  <button
+                                    className="button-secondary button-chip"
+                                    onClick={handleDownloadReelFrameGallery}
+                                    type="button"
+                                  >
+                                    Download all 10
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                            <p className="reel-frame-gallery-note">
+                              Contact-sheet view only. Click one frame to expand it and download a single still.
+                            </p>
+                            {isReelFrameGalleryOpen ? (
+                              <>
+                                {isReelFrameGalleryStale ? (
+                                  <div className="status">
+                                    Clip windows changed after the last extraction. Refresh the gallery to rebuild it from the
+                                    latest reel workspace.
+                                  </div>
+                                ) : null}
+                                {reelFrameGalleryError ? <div className="status error">{reelFrameGalleryError}</div> : null}
+                                {!reelFrameGalleryError && reelFrameGallery ? (
+                                  <div className="reel-frame-gallery-grid">
+                                    {reelFrameGallery.frames.map((frame) => {
+                                      const frameUrl = getReelFrameGalleryFrameUrl(workflowAlbum, reelFrameGallery, frame);
+                                      return (
+                                        <button
+                                          className="reel-frame-card"
+                                          key={frame.frame_id}
+                                          onClick={() => setExpandedReelFrame(frame)}
+                                          type="button"
+                                        >
+                                          {frameUrl ? <img alt="" aria-hidden="true" src={frameUrl} /> : null}
+                                          <span>
+                                            {frame.role} • {formatDuration(frame.source_timestamp_seconds)}
+                                          </span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                ) : null}
+                              </>
+                            ) : null}
+                          </div>
+                        </div>
+                      ) : null}
                       <div className="ai-card ai-card-wide">
                         <div className="reel-plan-header">
                           <div>
@@ -5257,6 +5546,29 @@ export default function Page() {
           ) : null}
         </div>
       </section>
+      {expandedReelFrame && reelFrameGallery ? (
+        <div className="frame-lightbox" onClick={() => setExpandedReelFrame(null)} role="presentation">
+          <div className="frame-lightbox-card" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true">
+            <div className="frame-lightbox-header">
+              <div className="frame-lightbox-meta">
+                <strong>{expandedReelFrame.role}</strong>
+                <span>
+                  {expandedReelFrame.original_filename} • {formatDuration(expandedReelFrame.source_timestamp_seconds)}
+                </span>
+              </div>
+              <button className="button-secondary button-chip" onClick={() => setExpandedReelFrame(null)} type="button">
+                Close
+              </button>
+            </div>
+            {expandedReelFrameUrl ? <img alt="" aria-hidden="true" src={expandedReelFrameUrl} /> : null}
+            <div className="actions">
+              <button className="button-secondary button-chip" onClick={() => handleDownloadReelFrame(expandedReelFrame)} type="button">
+                Download this frame
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </main>
   );
 }
