@@ -5,6 +5,7 @@ import shutil
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
@@ -54,6 +55,7 @@ class ReelRenderer:
             reel_draft.get("video_strategy"),
             self.ffmpeg_binary,
         )
+        render_started_at = perf_counter()
         filter_settings = self._normalize_filter_settings(reel_draft.get("filter_settings"))
 
         output_path = self._resolve_output_path(output_relative_path)
@@ -155,6 +157,7 @@ class ReelRenderer:
             "content_type": "video/mp4",
             "file_size_bytes": output_path.stat().st_size,
             "rendered_at": datetime.now(UTC).isoformat(),
+            "render_duration_seconds": round(perf_counter() - render_started_at, 3),
             "output_width": int(reel_draft.get("output_width") or 1080),
             "output_height": int(reel_draft.get("output_height") or 1920),
             "fps": int(reel_draft.get("fps") or 30),

@@ -36,6 +36,14 @@ SUPPORTED_FRAME_MIME_TYPES = {
     "image/png",
     "image/webp",
 }
+STANDARD_MULTIMODAL_VISUAL_LIMIT = 6
+PROXY_MULTIMODAL_VISUAL_LIMIT = 10
+PROXY_VIDEO_FRAME_VISUAL_LIMIT = 8
+PROXY_IMAGE_VISUAL_LIMIT = 3
+PROXY_REEL_MAX_VIDEO_STEPS = 4
+PROXY_HYBRID_DETAIL_STEP_LIMIT = 2
+PROXY_HYBRID_DETAIL_SOURCE_LIMIT = 8
+PROXY_HYBRID_MIN_DETAIL_RANK_SCORE = 0.25
 
 
 class AlbumSuggestionService:
@@ -55,8 +63,14 @@ class AlbumSuggestionService:
         album: dict[str, Any],
         *,
         reel_variant_request: dict[str, Any] | None = None,
+        analysis_profile: str = "standard",
     ) -> dict[str, Any]:
-        multimodal_parts = self._build_multimodal_parts(album) if self.gemini_client and types else []
+        normalized_analysis_profile = self._normalize_analysis_profile(analysis_profile)
+        multimodal_parts = (
+            self._build_multimodal_parts(album, analysis_profile=normalized_analysis_profile)
+            if self.gemini_client and types
+            else []
+        )
         if self.gemini_client and multimodal_parts:
             try:
                 response = self.gemini_client.models.generate_content(
@@ -74,11 +88,12 @@ class AlbumSuggestionService:
                     media_insights=data["media_insights"],
                     caption_ideas=data["caption_ideas"],
                     reel_variant_request=reel_variant_request,
+                    analysis_profile=normalized_analysis_profile,
                 )
                 return {
                     **data,
                     **curation_payload,
-                    "analysis_mode": "multimodal",
+                    "analysis_mode": self._analysis_mode("multimodal", normalized_analysis_profile),
                     "route": {
                         "provider_mode": "gemini",
                         "model_used": self.gemini_model,
@@ -88,7 +103,7 @@ class AlbumSuggestionService:
             except Exception:
                 pass
 
-        prompt = self._build_text_prompt(album)
+        prompt = self._build_text_prompt(album, analysis_profile=normalized_analysis_profile)
         try:
             data = self.router.ask_json(prompt, model_alias="ggl2")
             normalized_data = self._normalize_suggestion_payload(data, album)
@@ -97,11 +112,12 @@ class AlbumSuggestionService:
                 media_insights=normalized_data["media_insights"],
                 caption_ideas=normalized_data["caption_ideas"],
                 reel_variant_request=reel_variant_request,
+                analysis_profile=normalized_analysis_profile,
             )
             return {
                 **normalized_data,
                 **curation_payload,
-                "analysis_mode": "metadata_fallback",
+                "analysis_mode": self._analysis_mode("metadata_fallback", normalized_analysis_profile),
                 "route": self.router.get_last_resolution(),
             }
         except Exception as exc:
@@ -111,17 +127,26 @@ class AlbumSuggestionService:
                 media_insights=normalized_data["media_insights"],
                 caption_ideas=normalized_data["caption_ideas"],
                 reel_variant_request=reel_variant_request,
+                analysis_profile=normalized_analysis_profile,
             )
             return {
                 **normalized_data,
                 **curation_payload,
-                "analysis_mode": "metadata_fallback",
+                "analysis_mode": self._analysis_mode("metadata_fallback", normalized_analysis_profile),
                 "route": {
                     **(self.router.get_last_resolution() or {}),
                     "llm_failed": True,
                     "llm_error": str(exc),
                 },
             }
+
+    @staticmethod
+    def _normalize_analysis_profile(value: str) -> str:
+        return "proxy" if str(value or "").strip().lower() in {"proxy", "heavy", "heavy_proxy"} else "standard"
+
+    @staticmethod
+    def _analysis_mode(base_mode: str, analysis_profile: str) -> str:
+        return f"proxy_{base_mode}" if analysis_profile == "proxy" else base_mode
 
     def generate_description(self, album: dict[str, Any]) -> dict[str, Any]:
         multimodal_parts = self._build_multimodal_description_parts(album) if self.gemini_client and types else []
@@ -228,42 +253,102 @@ class AlbumSuggestionService:
         versions = self._normalize_reel_draft_versions(album, existing_versions)
         return [version for version in versions if version.get("version_id") != version_id]
 
-    def _build_multimodal_parts(self, album: dict[str, Any]) -> list[types.Part]:
-        parts: list[types.Part] = [types.Part.from_text(text=self._build_multimodal_prompt(album))]
+    def _build_multimodal_parts(self, album: dict[str, Any], *, analysis_profile: str = "standard") -> list[types.Part]:
+        parts: list[types.Part] = [
+            types.Part.from_text(text=self._build_multimodal_prompt(album, analysis_profile=analysis_profile))
+        ]
+
+        if analysis_profile == "proxy":
+            return self._build_proxy_multimodal_parts(parts, album)
+
         visual_count = 0
         for media_item in album.get("media_items", []):
-            if visual_count >= 6:
+            if visual_count >= STANDARD_MULTIMODAL_VISUAL_LIMIT:
                 break
 
             content_type = media_item.get("content_type") or ""
             if content_type not in SUPPORTED_IMAGE_MIME_TYPES:
-                visual_count += self._append_video_frame_parts(parts, media_item, remaining=6 - visual_count)
-                continue
-
-            stored_path = Path(media_item.get("stored_path", ""))
-            if not stored_path.exists():
-                continue
-
-            payload = stored_path.read_bytes()
-            if len(payload) > 8_000_000:
-                continue
-
-            parts.append(
-                types.Part.from_text(
-                    text=(
-                        f"Media item {media_item['id']} | filename={media_item['original_filename']} | "
-                        f"content_type={content_type} | width={media_item.get('width')} | "
-                        f"height={media_item.get('height')} | duration_seconds={media_item.get('duration_seconds')} | "
-                        f"frame_rate={media_item.get('frame_rate')} | video_codec={media_item.get('video_codec')} | "
-                        f"media_score={media_item.get('media_score')} | captured_at={media_item.get('captured_at')} | "
-                        f"source_device={media_item.get('source_device')} | gps={media_item.get('gps')}"
-                    )
+                visual_count += self._append_video_frame_parts(
+                    parts,
+                    media_item,
+                    remaining=STANDARD_MULTIMODAL_VISUAL_LIMIT - visual_count,
+                    analysis_profile=analysis_profile,
                 )
-            )
-            parts.append(types.Part.from_bytes(data=payload, mime_type=content_type))
-            visual_count += 1
+                continue
+
+            visual_count += self._append_image_part(parts, media_item)
 
         return parts if visual_count > 0 else []
+
+    def _build_proxy_multimodal_parts(self, parts: list[types.Part], album: dict[str, Any]) -> list[types.Part]:
+        media_items = album.get("media_items", [])
+        visual_count = 0
+        video_frame_count = 0
+
+        for media_item in media_items:
+            if video_frame_count >= PROXY_VIDEO_FRAME_VISUAL_LIMIT or visual_count >= PROXY_MULTIMODAL_VISUAL_LIMIT:
+                break
+            if str(media_item.get("media_kind") or "") != "video":
+                continue
+
+            added = self._append_video_frame_parts(
+                parts,
+                media_item,
+                remaining=min(
+                    PROXY_VIDEO_FRAME_VISUAL_LIMIT - video_frame_count,
+                    PROXY_MULTIMODAL_VISUAL_LIMIT - visual_count,
+                ),
+                analysis_profile="proxy",
+            )
+            video_frame_count += added
+            visual_count += added
+
+        image_count = 0
+        ranked_images = sorted(
+            [
+                item
+                for item in media_items
+                if str(item.get("content_type") or "") in SUPPORTED_IMAGE_MIME_TYPES
+            ],
+            key=self._base_rank_score,
+            reverse=True,
+        )
+        for media_item in ranked_images:
+            if image_count >= PROXY_IMAGE_VISUAL_LIMIT or visual_count >= PROXY_MULTIMODAL_VISUAL_LIMIT:
+                break
+            added = self._append_image_part(parts, media_item)
+            image_count += added
+            visual_count += added
+
+        return parts if visual_count > 0 else []
+
+    def _append_image_part(self, parts: list[types.Part], media_item: dict[str, Any]) -> int:
+        content_type = str(media_item.get("content_type") or "")
+        if content_type not in SUPPORTED_IMAGE_MIME_TYPES:
+            return 0
+
+        stored_path = Path(media_item.get("stored_path", ""))
+        if not stored_path.exists():
+            return 0
+
+        payload = stored_path.read_bytes()
+        if len(payload) > 8_000_000:
+            return 0
+
+        parts.append(
+            types.Part.from_text(
+                text=(
+                    f"Media item {media_item['id']} | filename={media_item['original_filename']} | "
+                    f"content_type={content_type} | width={media_item.get('width')} | "
+                    f"height={media_item.get('height')} | duration_seconds={media_item.get('duration_seconds')} | "
+                    f"frame_rate={media_item.get('frame_rate')} | video_codec={media_item.get('video_codec')} | "
+                    f"media_score={media_item.get('media_score')} | captured_at={media_item.get('captured_at')} | "
+                    f"source_device={media_item.get('source_device')} | gps={media_item.get('gps')}"
+                )
+            )
+        )
+        parts.append(types.Part.from_bytes(data=payload, mime_type=content_type))
+        return 1
 
     def _build_multimodal_description_parts(self, album: dict[str, Any]) -> list[types.Part]:
         parts: list[types.Part] = [types.Part.from_text(text=self._build_description_multimodal_prompt(album))]
@@ -302,10 +387,20 @@ class AlbumSuggestionService:
 
         return parts if visual_count > 0 else []
 
-    def _build_multimodal_prompt(self, album: dict[str, Any]) -> str:
+    def _build_multimodal_prompt(self, album: dict[str, Any], *, analysis_profile: str = "standard") -> str:
+        profile_instruction = ""
+        if analysis_profile == "proxy":
+            profile_instruction = (
+                "This is the separate heavy/proxy comparison read. Prefer server keyframes and timeline-window metadata "
+                "from completed heavy processing jobs when judging long videos and choosing reel moments. "
+                "Use the proxy/keyframe evidence as a discovery layer for hidden detail beats, but preserve the strongest "
+                "overall travel story instead of filling every reel with similar underwater floor shots.\n"
+            )
+
         return (
             "You are helping a travel-media app understand an uploaded album.\n"
             "Use the album description, filenames, metadata, attached images, and attached video frame samples.\n"
+            f"{profile_instruction}"
             "Return strict JSON with keys:\n"
             "album_summary, visual_trip_story, likely_categories, caption_ideas, cover_image_media_id, media_insights.\n"
             "Rules:\n"
@@ -334,36 +429,51 @@ class AlbumSuggestionService:
             f"Media count: {len(album.get('media_items', []))}\n"
         )
 
-    def _build_text_prompt(self, album: dict[str, Any]) -> str:
+    def _build_text_prompt(self, album: dict[str, Any], *, analysis_profile: str = "standard") -> str:
         media_lines = []
         for media_item in album.get("media_items", []):
-            media_lines.append(
-                json.dumps(
+            media_payload = {
+                "media_id": media_item["id"],
+                "filename": media_item["original_filename"],
+                "content_type": media_item["content_type"],
+                "width": media_item.get("width"),
+                "height": media_item.get("height"),
+                "duration_seconds": media_item.get("duration_seconds"),
+                "frame_rate": media_item.get("frame_rate"),
+                "video_codec": media_item.get("video_codec"),
+                "media_score": media_item.get("media_score"),
+                "metadata_source": media_item.get("metadata_source"),
+                "captured_at": media_item.get("captured_at"),
+                "source_device": media_item.get("source_device"),
+                "gps": media_item.get("gps"),
+                "analysis_frame_count": media_item.get("analysis_frame_count"),
+                "analysis_frame_timestamps_seconds": media_item.get("analysis_frame_timestamps_seconds"),
+                "file_size_bytes": media_item.get("file_size_bytes"),
+            }
+            if analysis_profile == "proxy":
+                media_payload.update(
                     {
-                        "media_id": media_item["id"],
-                        "filename": media_item["original_filename"],
-                        "content_type": media_item["content_type"],
-                        "width": media_item.get("width"),
-                        "height": media_item.get("height"),
-                        "duration_seconds": media_item.get("duration_seconds"),
-                        "frame_rate": media_item.get("frame_rate"),
-                        "video_codec": media_item.get("video_codec"),
-                        "media_score": media_item.get("media_score"),
-                        "metadata_source": media_item.get("metadata_source"),
-                        "captured_at": media_item.get("captured_at"),
-                        "source_device": media_item.get("source_device"),
-                        "gps": media_item.get("gps"),
-                        "analysis_frame_count": media_item.get("analysis_frame_count"),
-                        "analysis_frame_timestamps_seconds": media_item.get("analysis_frame_timestamps_seconds"),
-                        "file_size_bytes": media_item.get("file_size_bytes"),
-                    },
-                    ensure_ascii=True,
+                        "heavy_processing_keyframe_count": media_item.get("heavy_processing_keyframe_count"),
+                        "heavy_processing_keyframe_timestamps_seconds": media_item.get(
+                            "heavy_processing_keyframe_timestamps_seconds"
+                        ),
+                        "heavy_processing_timeline_windows": media_item.get("heavy_processing_timeline_windows"),
+                    }
                 )
+            media_lines.append(json.dumps(media_payload, ensure_ascii=True))
+
+        profile_instruction = ""
+        if analysis_profile == "proxy":
+            profile_instruction = (
+                "This is the separate heavy/proxy comparison read. Prefer completed heavy-processing "
+                "keyframe timestamps and timeline windows when judging long videos and selecting reel moments. "
+                "Use proxy evidence to find hidden detail beats, but keep the strongest travel-story structure.\n"
             )
 
         return (
             "You are helping a travel-media app understand an uploaded album.\n"
             "No actual images are attached in this fallback mode, so rely on album description, filenames, and metadata only.\n"
+            f"{profile_instruction}"
             "Return strict JSON with keys:\n"
             "album_summary, visual_trip_story, likely_categories, caption_ideas, cover_image_media_id, media_insights.\n"
             "Rules:\n"
@@ -399,6 +509,9 @@ class AlbumSuggestionService:
                         "gps": media_item.get("gps"),
                         "analysis_frame_count": media_item.get("analysis_frame_count"),
                         "analysis_frame_timestamps_seconds": media_item.get("analysis_frame_timestamps_seconds"),
+                        "heavy_processing_keyframe_count": media_item.get("heavy_processing_keyframe_count"),
+                        "heavy_processing_keyframe_timestamps_seconds": media_item.get("heavy_processing_keyframe_timestamps_seconds"),
+                        "heavy_processing_timeline_windows": media_item.get("heavy_processing_timeline_windows"),
                         "file_size_bytes": media_item.get("file_size_bytes"),
                     },
                     ensure_ascii=True,
@@ -480,6 +593,7 @@ class AlbumSuggestionService:
         media_insights: list[dict[str, Any]],
         caption_ideas: list[str],
         reel_variant_request: dict[str, Any] | None = None,
+        analysis_profile: str = "standard",
     ) -> dict[str, Any]:
         media_items = album.get("media_items", [])
         group_map = self._build_group_map(media_items)
@@ -495,7 +609,17 @@ class AlbumSuggestionService:
             media_insights=media_insights,
             caption_ideas=caption_ideas,
             reel_variant_request=reel_variant_request,
+            analysis_profile=analysis_profile,
         )
+        if analysis_profile == "proxy":
+            hybrid_reel_variants = self._build_hybrid_proxy_reel_variants(
+                album,
+                proxy_reel_variants=reel_variants,
+                caption_ideas=caption_ideas,
+            )
+            if hybrid_reel_variants:
+                reel_variants = hybrid_reel_variants
+            reel_variants = self._tag_proxy_reel_variants(reel_variants)
         primary_variant = reel_variants[0] if reel_variants else None
 
         return {
@@ -508,6 +632,390 @@ class AlbumSuggestionService:
             "reel_draft_versions": [],
             "reel_variant_request_summary": reel_variant_request_summary,
             "shot_groups": shot_groups,
+        }
+
+    @staticmethod
+    def _tag_proxy_reel_variants(reel_variants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        tagged_variants: list[dict[str, Any]] = []
+        for index, variant in enumerate(reel_variants, start=1):
+            next_variant = deepcopy(variant)
+            base_variant_id = str(next_variant.get("variant_id") or f"variant-{index}").strip()
+            next_variant["variant_id"] = base_variant_id if base_variant_id.startswith("proxy-") else f"proxy-{base_variant_id}"
+            label = str(next_variant.get("label") or f"Variant {index}").strip() or f"Variant {index}"
+            next_variant["label"] = label if label.lower().startswith("proxy") else f"Proxy • {label}"
+            creative_angle = str(next_variant.get("creative_angle") or "proxy keyframe cut").strip()
+            if "proxy" not in creative_angle.lower() and "keyframe" not in creative_angle.lower():
+                creative_angle = f"{creative_angle}; hybrid proxy detail beats"
+            next_variant["creative_angle"] = creative_angle
+            reel_draft = next_variant.get("reel_draft")
+            if isinstance(reel_draft, dict):
+                title = str(reel_draft.get("title") or "").strip()
+                if title and not title.lower().startswith("proxy"):
+                    reel_draft["title"] = f"Proxy • {title}"
+            tagged_variants.append(next_variant)
+        return tagged_variants
+
+    def _build_hybrid_proxy_reel_variants(
+        self,
+        album: dict[str, Any],
+        *,
+        proxy_reel_variants: list[dict[str, Any]],
+        caption_ideas: list[str],
+    ) -> list[dict[str, Any]]:
+        standard_suggestion = album.get("cached_suggestion")
+        if not isinstance(standard_suggestion, dict):
+            return []
+
+        standard_variants = self._normalize_reel_draft_variants(
+            album,
+            standard_suggestion.get("reel_draft_variants"),
+        )
+        if not standard_variants and isinstance(standard_suggestion.get("reel_draft"), dict):
+            try:
+                standard_variants = [
+                    {
+                        "variant_id": "standard-base",
+                        "label": "Standard base",
+                        "target_duration_seconds": round(
+                            float(standard_suggestion["reel_draft"].get("estimated_total_duration_seconds") or 0.0),
+                            1,
+                        ),
+                        "creative_angle": "standard story base",
+                        "reel_plan": standard_suggestion.get("reel_plan"),
+                        "reel_draft": self.rebuild_reel_draft(
+                            album,
+                            standard_suggestion["reel_draft"],
+                            existing_draft=standard_suggestion["reel_draft"],
+                        ),
+                    }
+                ]
+            except (TypeError, ValueError):
+                standard_variants = []
+
+        if not standard_variants:
+            return []
+
+        detail_sources = self._build_proxy_detail_sources(album)
+        if not detail_sources:
+            return []
+
+        proxy_variant_by_profile = {
+            self._variant_profile_key(variant): variant
+            for variant in proxy_reel_variants
+            if isinstance(variant, dict)
+        }
+        hybrid_variants: list[dict[str, Any]] = []
+        seen_variant_signatures: set[str] = set()
+
+        for index, standard_variant in enumerate(standard_variants):
+            base_draft = standard_variant.get("reel_draft")
+            if not isinstance(base_draft, dict):
+                continue
+
+            hybrid_draft = self._build_hybrid_proxy_reel_draft(
+                album,
+                base_draft,
+                detail_sources=detail_sources,
+                variant_index=index,
+            )
+            if hybrid_draft is None:
+                continue
+
+            variant_signature = json.dumps(
+                [
+                    {
+                        "media_id": step["media_id"],
+                        "selection_mode": step["selection_mode"],
+                        "clip_start_seconds": step.get("clip_start_seconds"),
+                        "clip_end_seconds": step.get("clip_end_seconds"),
+                    }
+                    for step in hybrid_draft.get("steps", [])
+                ],
+                sort_keys=True,
+            )
+            if variant_signature in seen_variant_signatures:
+                continue
+            seen_variant_signatures.add(variant_signature)
+
+            base_variant_id = str(standard_variant.get("variant_id") or f"variant-{index + 1}").strip()
+            base_label = str(standard_variant.get("label") or f"Variant {index + 1}").strip() or f"Variant {index + 1}"
+            profile_key = self._variant_profile_key(standard_variant)
+            proxy_variant = proxy_variant_by_profile.get(profile_key) or {}
+            hybrid_variants.append(
+                {
+                    "variant_id": (
+                        base_variant_id
+                        if base_variant_id.startswith("proxy-hybrid-")
+                        else f"proxy-hybrid-{base_variant_id.removeprefix('proxy-')}"
+                    ),
+                    "label": base_label if base_label.lower().startswith("proxy hybrid") else f"Proxy Hybrid • {base_label}",
+                    "target_duration_seconds": round(
+                        float(
+                            standard_variant.get("target_duration_seconds")
+                            or hybrid_draft.get("estimated_total_duration_seconds")
+                            or 0.0
+                        ),
+                        1,
+                    ),
+                    "creative_angle": "standard story + proxy detail beats",
+                    "reel_plan": self._build_reel_plan_from_draft(hybrid_draft),
+                    "reel_draft": hybrid_draft,
+                    "proxy_source_variant_id": proxy_variant.get("variant_id"),
+                }
+            )
+
+        return hybrid_variants
+
+    @staticmethod
+    def _variant_profile_key(variant: dict[str, Any]) -> str:
+        value = f"{variant.get('variant_id', '')} {variant.get('label', '')} {variant.get('creative_angle', '')}".lower()
+        if "motion" in value:
+            return "motion"
+        if "scenic" in value:
+            return "scenic"
+        return "balanced"
+
+    def _build_proxy_detail_sources(self, album: dict[str, Any]) -> list[dict[str, Any]]:
+        detail_sources: list[dict[str, Any]] = []
+        for media_item in album.get("media_items", []):
+            if str(media_item.get("media_kind") or "") != "video":
+                continue
+
+            ranked_keyframes = self._rank_server_keyframe_sources(media_item)
+            diverse_keyframes = self._select_diverse_proxy_sources(
+                ranked_keyframes,
+                limit=PROXY_HYBRID_DETAIL_SOURCE_LIMIT,
+            )
+            for source in diverse_keyframes:
+                rank_score = float(source.get("rank_score") or 0.0)
+                if rank_score < PROXY_HYBRID_MIN_DETAIL_RANK_SCORE:
+                    continue
+                timestamp = self._to_float(source.get("timestamp"))
+                if timestamp is None:
+                    continue
+                detail_sources.append(
+                    {
+                        **source,
+                        "media_id": media_item.get("id"),
+                        "media_item": media_item,
+                        "timestamp": round(timestamp, 3),
+                    }
+                )
+
+        return sorted(
+            detail_sources,
+            key=lambda source: (
+                -float(source.get("rank_score") or 0.0),
+                float(source.get("timestamp") or 0.0),
+            ),
+        )
+
+    def _build_hybrid_proxy_reel_draft(
+        self,
+        album: dict[str, Any],
+        base_draft: dict[str, Any],
+        *,
+        detail_sources: list[dict[str, Any]],
+        variant_index: int,
+    ) -> dict[str, Any] | None:
+        base_steps = base_draft.get("steps")
+        if not isinstance(base_steps, list) or not base_steps:
+            return None
+
+        replacement_indices = self._choose_hybrid_proxy_replacement_indices(base_steps)
+        if not replacement_indices:
+            return None
+
+        existing_windows = self._extract_video_windows(base_steps)
+        rotated_sources = self._rotate_proxy_detail_sources(detail_sources, variant_index)
+        selected_sources: list[dict[str, Any]] = []
+        for source in rotated_sources:
+            media_item = source.get("media_item")
+            timestamp = self._to_float(source.get("timestamp"))
+            if not isinstance(media_item, dict) or timestamp is None:
+                continue
+            if any(
+                str(existing_media_id) == str(source.get("media_id"))
+                and abs(timestamp - ((start + end) / 2)) < max(18.0, (end - start) * 1.6)
+                for existing_media_id, start, end in existing_windows
+            ):
+                continue
+            if any(
+                str(selected.get("media_id")) == str(source.get("media_id"))
+                and abs(timestamp - float(selected.get("timestamp") or 0.0)) < 45.0
+                for selected in selected_sources
+            ):
+                continue
+            selected_sources.append(source)
+            if len(selected_sources) >= min(PROXY_HYBRID_DETAIL_STEP_LIMIT, len(replacement_indices)):
+                break
+
+        if not selected_sources:
+            return None
+
+        replacement_indices = replacement_indices[: len(selected_sources)]
+        edited_steps = [self._build_reel_step_edit_payload(step) for step in base_steps]
+        for replacement_index, detail_source in zip(replacement_indices, selected_sources, strict=False):
+            media_item = detail_source.get("media_item")
+            if not isinstance(media_item, dict):
+                continue
+            base_step = base_steps[replacement_index]
+            role = str(base_step.get("role") or "Detail").strip() or "Detail"
+            desired_duration = self._to_float(base_step.get("suggested_duration_seconds")) or self._suggest_reel_step_duration(
+                media_item,
+                role=role,
+            )
+            clip_start_seconds, clip_end_seconds = self._build_proxy_detail_window(
+                media_item,
+                anchor_timestamp_seconds=float(detail_source.get("timestamp") or 0.0),
+                desired_duration_seconds=desired_duration,
+            )
+            rank_score = float(detail_source.get("rank_score") or 0.0)
+            edited_steps[replacement_index] = {
+                **edited_steps[replacement_index],
+                "role": "Discovered detail",
+                "media_id": str(media_item.get("id") or ""),
+                "source_role": "proxy_detail_video",
+                "clip_start_seconds": clip_start_seconds,
+                "clip_end_seconds": clip_end_seconds,
+                "suggested_duration_seconds": round(max(0.3, clip_end_seconds - clip_start_seconds), 1),
+                "edit_instruction": "Use this proxy-discovered detail beat as a short texture insert inside the standard story.",
+                "why": (
+                    f"Proxy detail beat from {detail_source.get('source_label') or 'server keyframe'} "
+                    f"near {float(detail_source.get('timestamp') or 0.0):.1f}s "
+                    f"(rank {rank_score:.2f}); injected into the standard reel structure."
+                ),
+            }
+
+        title = str(base_draft.get("title") or self._build_reel_title(album, caption_ideas=[])).strip()
+        edited_draft = {
+            "title": title if title.lower().startswith("proxy hybrid") else f"Proxy Hybrid • {title}",
+            "caption": base_draft.get("caption"),
+            "cover_media_id": base_draft.get("cover_media_id"),
+            "audio_strategy": base_draft.get("audio_strategy"),
+            "filter_settings": base_draft.get("filter_settings"),
+            "steps": edited_steps,
+        }
+        existing_draft = {
+            **base_draft,
+            "title": edited_draft["title"],
+        }
+        try:
+            return self.rebuild_reel_draft(album, edited_draft, existing_draft=existing_draft)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _build_reel_step_edit_payload(step: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "role": step.get("role"),
+            "media_id": step.get("media_id"),
+            "source_role": step.get("source_role"),
+            "suggested_duration_seconds": step.get("suggested_duration_seconds"),
+            "clip_start_seconds": step.get("clip_start_seconds"),
+            "clip_end_seconds": step.get("clip_end_seconds"),
+            "frame_mode": step.get("frame_mode"),
+            "focus_x_percent": step.get("focus_x_percent"),
+            "focus_y_percent": step.get("focus_y_percent"),
+            "edit_instruction": step.get("edit_instruction"),
+            "why": step.get("why"),
+        }
+
+    @staticmethod
+    def _choose_hybrid_proxy_replacement_indices(steps: list[dict[str, Any]]) -> list[int]:
+        preferred_roles = {
+            "Detail": 0,
+            "Reveal": 1,
+            "Texture": 2,
+            "Scale": 3,
+            "Journey": 4,
+            "Establish": 5,
+            "Closer": 7,
+            "Hook": 9,
+        }
+        scored_indices: list[tuple[int, int, int]] = []
+        for index, step in enumerate(steps):
+            if str(step.get("media_kind") or "") != "video" and str(step.get("selection_mode") or "") != "video_clip":
+                continue
+            role = str(step.get("role") or "")
+            edge_penalty = 2 if index in {0, len(steps) - 1} else 0
+            scored_indices.append((preferred_roles.get(role, 6) + edge_penalty, index, len(scored_indices)))
+
+        scored_indices.sort(key=lambda item: (item[0], item[1], item[2]))
+        return sorted(index for _, index, _ in scored_indices[:PROXY_HYBRID_DETAIL_STEP_LIMIT])
+
+    @staticmethod
+    def _extract_video_windows(steps: list[dict[str, Any]]) -> list[tuple[str, float, float]]:
+        windows: list[tuple[str, float, float]] = []
+        for step in steps:
+            if str(step.get("media_kind") or "") != "video" and str(step.get("selection_mode") or "") != "video_clip":
+                continue
+            media_id = str(step.get("media_id") or "")
+            try:
+                start = float(step.get("clip_start_seconds"))
+                end = float(step.get("clip_end_seconds"))
+            except (TypeError, ValueError):
+                continue
+            if media_id and end > start:
+                windows.append((media_id, start, end))
+        return windows
+
+    @staticmethod
+    def _rotate_proxy_detail_sources(sources: list[dict[str, Any]], offset: int) -> list[dict[str, Any]]:
+        if not sources:
+            return []
+        normalized_offset = offset % len(sources)
+        return [*sources[normalized_offset:], *sources[:normalized_offset]]
+
+    def _build_proxy_detail_window(
+        self,
+        media_item: dict[str, Any],
+        *,
+        anchor_timestamp_seconds: float,
+        desired_duration_seconds: float,
+    ) -> tuple[float, float]:
+        duration_seconds = self._to_float(media_item.get("duration_seconds")) or 0.0
+        clip_duration = round(
+            min(
+                max(4.0, desired_duration_seconds),
+                max(4.0, self.max_reel_clip_duration_seconds),
+                max(4.0, duration_seconds or desired_duration_seconds),
+            ),
+            1,
+        )
+        start = max(0.0, anchor_timestamp_seconds - (clip_duration / 2))
+        if duration_seconds > 0 and start + clip_duration > duration_seconds:
+            start = max(0.0, duration_seconds - clip_duration)
+        end = start + clip_duration
+        if duration_seconds > 0:
+            end = min(duration_seconds, end)
+        return round(start, 1), round(end, 1)
+
+    @staticmethod
+    def _build_reel_plan_from_draft(reel_draft: dict[str, Any]) -> dict[str, Any]:
+        steps = []
+        for index, step in enumerate(reel_draft.get("steps") or [], start=1):
+            steps.append(
+                {
+                    "step_number": index,
+                    "role": step.get("role"),
+                    "media_id": step.get("media_id"),
+                    "media_kind": step.get("media_kind"),
+                    "source_role": step.get("source_role"),
+                    "selection_mode": step.get("selection_mode"),
+                    "clip_start_seconds": step.get("clip_start_seconds"),
+                    "clip_end_seconds": step.get("clip_end_seconds"),
+                    "suggested_duration_seconds": step.get("suggested_duration_seconds"),
+                    "edit_instruction": step.get("edit_instruction"),
+                    "why": step.get("why"),
+                }
+            )
+
+        return {
+            "cover_media_id": reel_draft.get("cover_media_id"),
+            "video_strategy": reel_draft.get("video_strategy"),
+            "estimated_total_duration_seconds": reel_draft.get("estimated_total_duration_seconds"),
+            "steps": steps,
         }
 
     def _normalize_reel_variant_request_summary(self, raw_summary: Any) -> dict[str, Any] | None:
@@ -622,6 +1130,7 @@ class AlbumSuggestionService:
         media_insights: list[dict[str, Any]],
         caption_ideas: list[str],
         reel_variant_request: dict[str, Any] | None = None,
+        analysis_profile: str = "standard",
     ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
         media_by_id = {item["id"]: item for item in album.get("media_items", [])}
         insight_by_id = {
@@ -674,6 +1183,7 @@ class AlbumSuggestionService:
                 target_duration_seconds=float(spec["target_duration_seconds"]),
                 max_video_steps=int(spec["max_video_steps"]) if spec.get("max_video_steps") is not None else None,
                 window_selection_offset=int(spec.get("window_selection_offset") or 0),
+                analysis_profile=analysis_profile,
             )
             if not reel_plan:
                 continue
@@ -1048,6 +1558,7 @@ class AlbumSuggestionService:
         target_duration_seconds: float,
         max_video_steps: int | None,
         window_selection_offset: int,
+        analysis_profile: str = "standard",
     ) -> dict[str, Any] | None:
         video_strategy, primary_video_id, secondary_video_id = self._decide_video_strategy(
             reel_candidates,
@@ -1064,6 +1575,17 @@ class AlbumSuggestionService:
                 if max_video_steps is None
                 else max(int(max_video_steps), max(1, len(role_specs) - 1))
             )
+        if analysis_profile == "proxy":
+            image_candidate_count = sum(
+                1
+                for candidate in ordered_candidates
+                if str(media_by_id.get(str(candidate.get("media_id") or ""), {}).get("media_kind") or "") == "image"
+            )
+            if image_candidate_count > 0:
+                effective_max_video_steps = min(
+                    effective_max_video_steps if effective_max_video_steps is not None else len(role_specs),
+                    PROXY_REEL_MAX_VIDEO_STEPS,
+                )
 
         used_still_media_ids: set[str] = set()
         video_use_counts: dict[str, int] = {}
@@ -1107,6 +1629,7 @@ class AlbumSuggestionService:
                     usage_index=usage_index,
                     existing_windows=selected_video_windows.get(candidate["media_id"], []),
                     window_selection_offset=window_selection_offset,
+                    analysis_profile=analysis_profile,
                 )
                 video_use_counts[candidate["media_id"]] = usage_index + 1
                 if clip_start_seconds is not None and clip_end_seconds is not None:
@@ -1532,22 +2055,39 @@ class AlbumSuggestionService:
         media_item: dict[str, Any],
         *,
         remaining: int,
+        analysis_profile: str = "standard",
     ) -> int:
         if remaining <= 0:
             return 0
 
-        relative_paths = media_item.get("analysis_frame_relative_paths") or []
-        timestamps = media_item.get("analysis_frame_timestamps_seconds") or []
-        mime_type = media_item.get("thumbnail_content_type") or "image/jpeg"
-        if mime_type not in SUPPORTED_FRAME_MIME_TYPES:
-            mime_type = "image/jpeg"
+        browser_frame_sources: list[dict[str, Any]] = []
+        for relative_path, timestamp in zip(
+            media_item.get("analysis_frame_relative_paths") or [],
+            media_item.get("analysis_frame_timestamps_seconds") or [],
+            strict=False,
+        ):
+            browser_frame_sources.append(
+                {
+                    "relative_path": relative_path,
+                    "timestamp": timestamp,
+                    "source_label": "browser sample",
+                    "mime_type": media_item.get("thumbnail_content_type") or "image/jpeg",
+                }
+            )
+        server_frame_sources = self._rank_server_keyframe_sources(media_item)
+
+        frame_sources = (
+            [*self._select_diverse_proxy_sources(server_frame_sources, limit=remaining), *browser_frame_sources]
+            if analysis_profile == "proxy"
+            else browser_frame_sources
+        )
 
         added = 0
-        for index, relative_path in enumerate(relative_paths):
+        for frame_source in frame_sources:
             if added >= remaining:
                 break
 
-            frame_path = self.storage_root / str(relative_path)
+            frame_path = self.storage_root / str(frame_source.get("relative_path") or "")
             if not frame_path.exists():
                 continue
 
@@ -1555,15 +2095,22 @@ class AlbumSuggestionService:
             if len(payload) > 8_000_000:
                 continue
 
-            timestamp = timestamps[index] if index < len(timestamps) else None
+            mime_type = str(frame_source.get("mime_type") or "image/jpeg")
+            if mime_type not in SUPPORTED_FRAME_MIME_TYPES:
+                mime_type = "image/jpeg"
+            timestamp = frame_source.get("timestamp")
             timestamp_text = f"{timestamp}s" if timestamp is not None else "unknown time"
+            rank_text = ""
+            if analysis_profile == "proxy" and frame_source.get("rank_score") is not None:
+                rank_text = f" | proxy_rank_score={frame_source.get('rank_score')}"
             parts.append(
                 types.Part.from_text(
                     text=(
-                        f"Video frame sample for media item {media_item['id']} | "
+                        f"Video {frame_source.get('source_label')} for media item {media_item['id']} | "
                         f"filename={media_item['original_filename']} | sample_time={timestamp_text} | "
                         f"duration_seconds={media_item.get('duration_seconds')} | frame_rate={media_item.get('frame_rate')} | "
                         f"video_codec={media_item.get('video_codec')} | media_score={media_item.get('media_score')}"
+                        f"{rank_text}"
                     )
                 )
             )
@@ -1571,6 +2118,103 @@ class AlbumSuggestionService:
             added += 1
 
         return added
+
+    def _rank_server_keyframe_sources(self, media_item: dict[str, Any]) -> list[dict[str, Any]]:
+        raw_sources: list[dict[str, Any]] = []
+        for index, (relative_path, timestamp) in enumerate(
+            zip(
+                media_item.get("heavy_processing_keyframe_relative_paths") or [],
+                media_item.get("heavy_processing_keyframe_timestamps_seconds") or [],
+                strict=False,
+            ),
+            start=1,
+        ):
+            normalized_timestamp = self._to_float(timestamp)
+            if normalized_timestamp is None:
+                continue
+
+            frame_path = self.storage_root / str(relative_path)
+            file_size_bytes = frame_path.stat().st_size if frame_path.exists() else 0
+            raw_sources.append(
+                {
+                    "relative_path": relative_path,
+                    "timestamp": round(normalized_timestamp, 3),
+                    "source_label": f"server keyframe {index:02d}",
+                    "mime_type": "image/jpeg",
+                    "file_size_bytes": file_size_bytes,
+                }
+            )
+
+        if not raw_sources:
+            return []
+
+        file_sizes = [int(source.get("file_size_bytes") or 0) for source in raw_sources]
+        min_size = min(file_sizes)
+        max_size = max(file_sizes)
+        size_range = max(1, max_size - min_size)
+        duration_seconds = self._to_float(media_item.get("duration_seconds")) or 0.0
+
+        ranked_sources: list[dict[str, Any]] = []
+        for source in raw_sources:
+            timestamp = self._to_float(source.get("timestamp")) or 0.0
+            file_size_bytes = int(source.get("file_size_bytes") or 0)
+            complexity_score = (file_size_bytes - min_size) / size_range
+            position_ratio = timestamp / duration_seconds if duration_seconds > 0 else 0.5
+            edge_penalty = 0.12 if position_ratio < 0.06 or position_ratio > 0.96 else 0.0
+            rank_score = max(0.0, min(1.0, (0.82 * complexity_score) + 0.18 - edge_penalty))
+            ranked_sources.append(
+                {
+                    **source,
+                    "rank_score": round(rank_score, 3),
+                }
+            )
+
+        return sorted(
+            ranked_sources,
+            key=lambda source: (
+                -float(source.get("rank_score") or 0.0),
+                float(source.get("timestamp") or 0.0),
+            ),
+        )
+
+    def _select_diverse_proxy_sources(self, sources: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+        if limit <= 0 or not sources:
+            return []
+
+        timestamps = [self._to_float(source.get("timestamp")) for source in sources]
+        numeric_timestamps = [timestamp for timestamp in timestamps if timestamp is not None]
+        if len(numeric_timestamps) <= 1:
+            return sources[:limit]
+
+        span = max(numeric_timestamps) - min(numeric_timestamps)
+        min_gap = max(12.0, span / max(limit + 1, 2) * 0.55)
+        selected: list[dict[str, Any]] = []
+        deferred: list[dict[str, Any]] = []
+
+        for source in sources:
+            timestamp = self._to_float(source.get("timestamp"))
+            if timestamp is None:
+                deferred.append(source)
+                continue
+
+            if all(
+                abs(timestamp - float(selected_source.get("timestamp") or 0.0)) >= min_gap
+                for selected_source in selected
+            ):
+                selected.append(source)
+            else:
+                deferred.append(source)
+
+            if len(selected) >= limit:
+                return sorted(selected, key=lambda item: float(item.get("timestamp") or 0.0))
+
+        for source in deferred:
+            if source not in selected:
+                selected.append(source)
+            if len(selected) >= limit:
+                break
+
+        return sorted(selected[:limit], key=lambda item: float(item.get("timestamp") or 0.0))
 
     def _build_group_map(self, media_items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
         grouped_items: dict[str, list[dict[str, Any]]] = {}
@@ -2543,22 +3187,43 @@ class AlbumSuggestionService:
         usage_index: int,
         existing_windows: list[tuple[float, float]] | None = None,
         window_selection_offset: int = 0,
+        analysis_profile: str = "standard",
     ) -> tuple[float | None, float | None]:
         duration = self._to_float(media_item.get("duration_seconds"))
         if duration is None or duration <= 0:
             return None, None
 
         suggested_duration = self._suggest_reel_step_duration(media_item, role=role)
-        timestamps = [
+        browser_timestamps = [
             round(float(timestamp), 2)
             for timestamp in (media_item.get("analysis_frame_timestamps_seconds") or [])
             if self._to_float(timestamp) is not None and 0 <= float(timestamp) <= duration
         ]
+        analysis_anchor_scores: dict[float, float] = {}
+        if analysis_profile == "proxy":
+            proxy_sources = self._build_proxy_window_sources(media_item)
+            timestamps = self._dedupe_timestamps(
+                [
+                    round(float(source["timestamp"]), 2)
+                    for source in proxy_sources
+                    if self._to_float(source.get("timestamp")) is not None
+                ]
+            )
+            analysis_anchor_scores = {
+                round(float(source["timestamp"]), 1): float(source.get("rank_score") or 0.0)
+                for source in proxy_sources
+                if self._to_float(source.get("timestamp")) is not None
+            }
+            if browser_timestamps:
+                timestamps = self._dedupe_timestamps([*timestamps, *browser_timestamps])
+        else:
+            timestamps = self._dedupe_timestamps(browser_timestamps)
         candidate_windows = self._build_video_window_candidates(
             duration_seconds=duration,
             suggested_duration_seconds=suggested_duration,
             analysis_timestamps=timestamps,
             role=role,
+            analysis_anchor_scores=analysis_anchor_scores,
         )
         if not candidate_windows:
             start = max(0.0, min(duration - suggested_duration, duration * 0.18))
@@ -2595,6 +3260,43 @@ class AlbumSuggestionService:
         start, end = candidate_windows[chosen_index]
         return round(start, 2), round(end, 2)
 
+    def _build_proxy_window_sources(self, media_item: dict[str, Any]) -> list[dict[str, Any]]:
+        ranked_keyframes = self._rank_server_keyframe_sources(media_item)
+        if ranked_keyframes:
+            return self._select_diverse_proxy_sources(ranked_keyframes, limit=PROXY_VIDEO_FRAME_VISUAL_LIMIT)
+
+        fallback_sources: list[dict[str, Any]] = []
+        for window in media_item.get("heavy_processing_timeline_windows") or []:
+            if not isinstance(window, dict):
+                continue
+            anchor = self._to_float(window.get("anchor_timestamp_seconds"))
+            if anchor is None:
+                start = self._to_float(window.get("start_seconds"))
+                end = self._to_float(window.get("end_seconds"))
+                if start is not None and end is not None:
+                    anchor = (start + end) / 2
+            if anchor is None:
+                continue
+            fallback_sources.append(
+                {
+                    "timestamp": round(anchor, 3),
+                    "rank_score": 0.35,
+                }
+            )
+        return fallback_sources
+
+    @staticmethod
+    def _dedupe_timestamps(timestamps: list[float]) -> list[float]:
+        deduped: list[float] = []
+        seen: set[float] = set()
+        for timestamp in timestamps:
+            key = round(float(timestamp), 1)
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(round(float(timestamp), 2))
+        return deduped
+
     def _build_video_window_candidates(
         self,
         *,
@@ -2602,6 +3304,7 @@ class AlbumSuggestionService:
         suggested_duration_seconds: float,
         analysis_timestamps: list[float],
         role: str,
+        analysis_anchor_scores: dict[float, float] | None = None,
     ) -> list[tuple[float, float]]:
         if duration_seconds <= 0:
             return []
@@ -2658,9 +3361,15 @@ class AlbumSuggestionService:
             closest_role_distance = min(abs(anchor_ratio - ratio) for ratio in role_target_ratios)
             primary_target_distance = abs(anchor_ratio - role_target_ratios[0])
             sampled_bonus = -0.035 if source_kind == "analysis" else 0.0
+            anchor_score = (
+                float((analysis_anchor_scores or {}).get(round(anchor_timestamp, 1), 0.0))
+                if source_kind == "analysis"
+                else 0.0
+            )
+            ranked_keyframe_bonus = -0.12 * max(0.0, min(1.0, anchor_score))
             ranked_windows.append(
                 (
-                    round(closest_role_distance + sampled_bonus, 6),
+                    round(closest_role_distance + sampled_bonus + ranked_keyframe_bonus, 6),
                     round(primary_target_distance, 6),
                     start,
                     end,

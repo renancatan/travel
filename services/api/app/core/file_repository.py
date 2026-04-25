@@ -48,6 +48,7 @@ class FileRepository:
             "description": description,
             "description_meta": None,
             "cached_suggestion": None,
+            "proxy_cached_suggestion": None,
             "map_entry": None,
             "rendered_reel": None,
             "created_at": _utc_now(),
@@ -91,8 +92,7 @@ class FileRepository:
             return None
 
         album["description"] = description.strip() if isinstance(description, str) and description.strip() else None
-        album["description_meta"] = None
-        album["cached_suggestion"] = None
+        self._invalidate_cached_ai(album, clear_description_meta=True)
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
@@ -113,21 +113,52 @@ class FileRepository:
         cached_suggestion: dict[str, Any] | None,
         *,
         invalidate_rendered_reel: bool = False,
+        suggestion_key: str = "cached_suggestion",
     ) -> dict[str, Any] | None:
         album = self.get_album(album_id)
         if album is None:
             return None
 
-        current_cached_suggestion = album.get("cached_suggestion")
+        normalized_suggestion_key = self._normalize_suggestion_key(suggestion_key)
+        current_cached_suggestion = album.get(normalized_suggestion_key)
         current_rendered_variants = []
         if isinstance(current_cached_suggestion, dict):
             current_rendered_variants = current_cached_suggestion.get("rendered_variant_renders") or []
         next_rendered_variants = cached_suggestion.get("rendered_variant_renders") if isinstance(cached_suggestion, dict) else []
         if current_rendered_variants and not next_rendered_variants:
-            self._clear_rendered_variant_files(album)
+            self._clear_rendered_variant_files(album, suggestion_key=normalized_suggestion_key)
         if invalidate_rendered_reel:
             self._clear_rendered_reel_files(album)
-        album["cached_suggestion"] = cached_suggestion
+        album[normalized_suggestion_key] = cached_suggestion
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def invalidate_album_ai(
+        self,
+        album_id: str,
+        *,
+        clear_description_meta: bool = False,
+        invalidate_rendered_reel: bool = False,
+    ) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        self._invalidate_cached_ai(album, clear_description_meta=clear_description_meta)
+        if invalidate_rendered_reel:
+            self._clear_rendered_reel_files(album)
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def invalidate_proxy_suggestion(self, album_id: str) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        self._clear_rendered_variant_files(album, suggestion_key="proxy_cached_suggestion")
+        album["proxy_cached_suggestion"] = None
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
@@ -146,21 +177,24 @@ class FileRepository:
         self,
         album_id: str,
         rendered_variant_renders: list[dict[str, Any]] | None,
+        *,
+        suggestion_key: str = "cached_suggestion",
     ) -> dict[str, Any] | None:
         album = self.get_album(album_id)
         if album is None:
             return None
 
-        cached_suggestion = album.get("cached_suggestion")
+        normalized_suggestion_key = self._normalize_suggestion_key(suggestion_key)
+        cached_suggestion = album.get(normalized_suggestion_key)
         if not isinstance(cached_suggestion, dict):
             return None
 
-        self._clear_rendered_variant_files(album)
+        self._clear_rendered_variant_files(album, suggestion_key=normalized_suggestion_key)
         if rendered_variant_renders:
             cached_suggestion["rendered_variant_renders"] = rendered_variant_renders
         else:
             cached_suggestion.pop("rendered_variant_renders", None)
-        album["cached_suggestion"] = cached_suggestion
+        album[normalized_suggestion_key] = cached_suggestion
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
@@ -387,6 +421,19 @@ class FileRepository:
                 thumbnail_path.unlink()
 
         self._remove_relative_paths(media_item.get("analysis_frame_relative_paths") or [])
+        processing_relative_paths = []
+        proxy_relative_path = str(media_item.get("heavy_processing_proxy_relative_path") or "").strip()
+        if proxy_relative_path:
+            processing_relative_paths.append(proxy_relative_path)
+        processing_relative_paths.extend(
+            str(relative_path)
+            for relative_path in (media_item.get("heavy_processing_keyframe_relative_paths") or [])
+            if str(relative_path).strip()
+        )
+        self._remove_relative_paths(processing_relative_paths)
+        processing_root = self._album_dir(album_id) / "processing" / media_id
+        if processing_root.exists():
+            shutil.rmtree(processing_root, ignore_errors=True)
 
         album["media_items"] = [item for item in media_items if item.get("id") != media_id]
         self._invalidate_cached_ai(album, clear_description_meta=True)
@@ -464,6 +511,7 @@ class FileRepository:
             "description": album.get("description"),
             "description_meta": album.get("description_meta"),
             "cached_suggestion": album.get("cached_suggestion"),
+            "proxy_cached_suggestion": album.get("proxy_cached_suggestion"),
             "map_entry": self._normalize_map_entry(album.get("map_entry")),
             "rendered_reel": album.get("rendered_reel"),
             "created_at": album.get("created_at", _utc_now()),
@@ -503,6 +551,31 @@ class FileRepository:
             "is_heavy_video": False,
             "video_duration_tier": None,
             "video_resolution_tier": None,
+            "heavy_processing_job_id": None,
+            "heavy_processing_job_status": None,
+            "heavy_processing_job_stage": None,
+            "heavy_processing_job_progress_percent": None,
+            "heavy_processing_job_error": None,
+            "heavy_processing_job_created_at": None,
+            "heavy_processing_job_started_at": None,
+            "heavy_processing_job_completed_at": None,
+            "heavy_processing_proxy_relative_path": None,
+            "heavy_processing_proxy_content_type": None,
+            "heavy_processing_proxy_file_size_bytes": None,
+            "heavy_processing_strategy": None,
+            "heavy_processing_proxy_reason": None,
+            "heavy_processing_proxy_duration_seconds": None,
+            "heavy_processing_keyframe_duration_seconds": None,
+            "heavy_processing_total_duration_seconds": None,
+            "heavy_processing_output_file_size_bytes": None,
+            "heavy_processing_keyframe_relative_paths": [],
+            "heavy_processing_keyframe_timestamps_seconds": [],
+            "heavy_processing_keyframe_count": 0,
+            "heavy_processing_timeline_windows": [],
+            "source_retention_policy": None,
+            "source_retention_recommendation": None,
+            "source_original_temporary_until": None,
+            "source_retention_estimated_gb_days": None,
             "detected_at": _utc_now(),
         }
         normalized = {**defaults, **media_item}
@@ -621,15 +694,25 @@ class FileRepository:
 
         album["rendered_reel"] = None
 
-    def _clear_rendered_variant_files(self, album: dict[str, Any]) -> None:
-        cached_suggestion = album.get("cached_suggestion")
+    @staticmethod
+    def _normalize_suggestion_key(suggestion_key: str) -> str:
+        return "proxy_cached_suggestion" if suggestion_key == "proxy_cached_suggestion" else "cached_suggestion"
+
+    def _clear_rendered_variant_files(
+        self,
+        album: dict[str, Any],
+        *,
+        suggestion_key: str = "cached_suggestion",
+    ) -> None:
+        normalized_suggestion_key = self._normalize_suggestion_key(suggestion_key)
+        cached_suggestion = album.get(normalized_suggestion_key)
         if not isinstance(cached_suggestion, dict):
             return
 
         rendered_variant_renders = cached_suggestion.get("rendered_variant_renders")
         if not isinstance(rendered_variant_renders, list):
             cached_suggestion.pop("rendered_variant_renders", None)
-            album["cached_suggestion"] = cached_suggestion
+            album[normalized_suggestion_key] = cached_suggestion
             return
 
         for rendered_variant in rendered_variant_renders:
@@ -644,11 +727,13 @@ class FileRepository:
                 shutil.rmtree(render_dir, ignore_errors=True)
 
         cached_suggestion.pop("rendered_variant_renders", None)
-        album["cached_suggestion"] = cached_suggestion
+        album[normalized_suggestion_key] = cached_suggestion
 
     def _invalidate_cached_ai(self, album: dict[str, Any], *, clear_description_meta: bool) -> None:
         self._clear_rendered_variant_files(album)
         album["cached_suggestion"] = None
+        self._clear_rendered_variant_files(album, suggestion_key="proxy_cached_suggestion")
+        album["proxy_cached_suggestion"] = None
         self._clear_rendered_reel_files(album)
         if clear_description_meta:
             album["description_meta"] = None

@@ -24,6 +24,7 @@ The product is intentionally narrower than the original idea. V1 is about ingest
 - Current backend: `services/api` using FastAPI
 - Local storage for now: `storage/local`
 - Future infra target: AWS first, but keep architecture portable
+- Business/pricing direction captured in `docs/business-decisions.md`
 
 ## Current Product Flow
 
@@ -110,6 +111,9 @@ Implemented in `services/api`:
 - `DELETE /albums/{album_id}/media/{media_id}`
 - `GET /albums/{album_id}/media/{media_id}/content`
 - `GET /albums/{album_id}/media/{media_id}/thumbnail`
+- `POST /albums/{album_id}/media/{media_id}/processing-job`
+- `GET /albums/{album_id}/media/{media_id}/processing-proxy`
+- `GET /albums/{album_id}/media/{media_id}/processing-keyframes/{frame_number}`
 - `POST /albums/{album_id}/description/auto`
 - `POST /albums/{album_id}/suggestions`
 - `POST /albums/{album_id}/reel-draft`
@@ -133,6 +137,37 @@ Current backend capabilities:
 - ISO-based video parsing for common `mp4` / `mov` style uploads without external tooling
 - browser-side video frame sampling so uploaded clips can provide real visual samples to the AI review flow
 - optional `ffprobe` enrichment and optional `ffmpeg` thumbnail generation when those binaries are available
+- first local heavy-video processing job slice:
+  - per-video job state is persisted on the media item
+  - local FastAPI `BackgroundTasks` runs the work after the API response
+  - `ffmpeg` creates a lighter analysis proxy
+  - server keyframes are extracted and saved
+  - first-pass timeline candidate windows are generated from keyframe spacing
+  - completed server keyframes can feed the proxy/heavy AI review as visual context
+- separate proxy/heavy AI comparison lane:
+  - standard album analysis still uses `cached_suggestion`
+  - proxy/heavy analysis stores a second suggestion payload in `proxy_cached_suggestion`
+  - the web UI now has both `Analyze album` and `Analyze with proxy`
+  - proxy analysis can start/wait for the existing heavy processing job, then creates separate `Proxy` reel variants from server keyframe/timeline context
+  - proxy compare reels render through separate proxy rendered-variant endpoints and do not overwrite the standard compare set
+  - heavy/proxy processing invalidates only `proxy_cached_suggestion`; it should not wipe `cached_suggestion`
+  - the UI has a fallback proxy-only card area for older/broken states where proxy results exist but standard cached suggestions are missing
+- Pamilacan 27m real-file test showed the first local heavy-video default is too proxy-heavy for FHD sources:
+  - original: `27m53s`, `1920 x 1080`, HEVC, about `5.9G`
+  - generated proxy: H.264 `720 x 1280`, about `505M`, user-observed around `10m`
+  - direct extraction of `12` server keyframes from the original took about `6s`
+  - next tuning should skip full proxy generation for FHD long videos unless another step truly needs the proxy
+- `petar55` standard-vs-proxy comparison:
+  - standard rendered variants felt better as default/scenic highlight reels
+  - proxy rendered variants surfaced underwater details invisible to standard, but repeated sandy/reef windows and were weaker as top-choice reels
+  - first tuning pass gives proxy analysis a dedicated video-keyframe visual budget before album stills, ranks server keyframes with a cheap complexity signal, selects diverse anchors, and caps proxy-heavy reel plans so still/story beats remain present
+  - still open: cheap complexity ranking is not semantic taste scoring, so the next quality step is to label/score keyframes by scene value before merging proxy-discovered detail beats into the standard story
+- `petar56` follow-up validation:
+  - proxy analysis semantically understood the video better, including coral, fish, diver, and turtle details
+  - rendered proxy reels improved as a detail-discovery lane but still were not clearly better than standard as final user-facing reels
+  - core issue is now clip-window selection: the AI insight knows more, but deterministic windows do not yet use semantic/taste scoring strongly enough
+  - implemented the next hybrid step: proxy comparison variants now become `Proxy Hybrid` variants when a standard analysis exists, preserving the standard reel structure and replacing up to two middle video beats with ranked proxy-discovered detail windows
+  - still open: add semantic labels/scores for keyframes and/or a separate labeled "Dive details" alternate
 - heuristic media scoring for images and videos
 - deterministic curation output for cover, carousel, and reel candidates
 - deterministic reel-plan output that turns reel candidates into a short ordered sequence
@@ -228,8 +263,34 @@ Implemented in `apps/web`:
   - empty-map-space drift is reduced by constraining panning/zoom-out to the active visited bounds
   - when a stop is selected, the bounds focus on that stop's city cluster when possible, otherwise its country cluster
   - this keeps country-level browsing much closer to the intended "walk around where we've actually been" behavior
+- the main media cards now expose the first heavy-video processing lane:
+  - long/heavy videos can start a processing job from the card
+  - progress/status is shown and the album polls while work is active
+  - completed jobs show proxy access plus a compact keyframe grid
+  - retention guidance is visible so long/4K originals are treated as temporary processing inputs by default
 
 ## Current State
+
+### Latest re-grounding
+
+- 2026-04-25 Markdown re-read confirmed the current direction:
+  - the standard album/reel path remains the default baseline
+  - the heavy/proxy lane is a separate comparison and discovery path, now leaning toward `Proxy Hybrid` variants rather than replacing standard reels
+  - full proxy generation proved too expensive as a default for the 27m FHD Pamilacan file, so direct keyframe/contact-sheet extraction should come first for FHD long videos unless a proxy is truly needed
+  - long/4K originals are temporary processing inputs by default unless paid/archive retention or credits explicitly keep them
+  - production still needs durable worker/queue infrastructure, retention cleanup, and cost telemetry before pricing decisions harden
+- 2026-04-25 implementation follow-up:
+  - heavy processing now chooses `direct_keyframes` for FHD long videos and `proxy_keyframes` only for 4K, high-bitrate, less portable, or otherwise proxy-worthy sources
+  - processing jobs now record first-pass cost telemetry: proxy time/size, keyframe time, total processing time, generated output bytes, and estimated temporary original GB-days
+  - proxy hybrid replacement beats now surface as `Discovered detail` inserts so the UI/product language matches the "proxy as scout" model
+  - the web sidebar now supports selecting individual albums or all albums and deleting the selected set after a confirmation dialog, useful for reclaiming local storage after heavy-file tests
+- 2026-04-25 `petar1` retest/read:
+  - fresh Pamilacan album used the new keyframe-first heavy job: `direct_keyframes`, `12` server frames, about `5.4s` processing, no proxy file
+  - standard variants still look like the taste/story baseline, with roughly `51-54s` video and `6-9s` images for a 60s reel
+  - proxy hybrid variants are now the strongest role for the heavy lane: preserve the standard structure and swap two middle beats with underwater `Discovered detail` windows
+  - product value should come from cheap indexing, candidate discovery, extra variants/exports, 4K/high-bitrate processing, and optional original retention; proxy generation itself should not be the default monetized unit
+  - heavy classification should combine duration and file size signals, e.g. `>10m`, `>500 MB`, 4K, high bitrate, or incompatible/expensive codecs
+  - local storage note: deleting albums does not currently clean all orphaned folders under `storage/local/renders`; old renders still need their own cleanup action
 
 ### Confirmed working
 
@@ -341,6 +402,19 @@ Implemented in `apps/web`:
 
 ## Known Gaps
 
+- business/cost controls are not implemented yet:
+  - large source videos should become temporary processing inputs by default, not permanent storage promises
+  - permanent original-video archive storage should be explicit paid or credit-consuming behavior
+  - heavy-video processing should be worker/queue-based instead of held open through API/load-balancer requests
+  - compare reel variant count should become tier/credit aware before production
+  - pricing direction is roughly `$9.99/month` plus usage credits, but final pricing should wait for telemetry
+  - required telemetry includes storage GB-days, egress, render/worker seconds, AI calls/tokens, visual inputs, retry counts, and per-album cost estimates
+- the first heavy-video processing path is local-only:
+  - it uses FastAPI `BackgroundTasks`, not a durable queue
+  - jobs may still be interrupted by process restarts
+  - there is no production retention cleanup yet
+  - there is no SQS/worker deployment yet
+  - timeline windows are first-pass spacing heuristics, not semantic scene detection
 - older videos do not get browser-sampled AI frames automatically; this currently happens during new browser uploads
 - no semantic or taste-aware quality scoring yet beyond the new heuristic signal
 - no semantic or taste-aware best-shot ranking yet beyond the new deterministic curation pass
@@ -518,6 +592,8 @@ Implemented in `apps/web`:
    - then validate `30m+` handling
    - only after that move to realistic worst-case albums like `3 x 1h 4K` dive files plus drone/mobile footage
    - make heavy analysis asynchronous with worker jobs, proxy generation, and timeline summaries instead of browser-only sampling
+   - treat long/4K originals as temporary processing inputs by default; preserve generated outputs and selected frames unless paid/archive retention is enabled
+   - first local slice exists with FastAPI `BackgroundTasks`; next step is turning that contract into a durable queue/worker path
 20. Define the long-form reel business/product rule for heavy videos:
    - for clips above the short-form threshold, do not stop at one reel suggestion
    - generate multiple clearly different story candidates from the same source video
@@ -526,10 +602,14 @@ Implemented in `apps/web`:
      - user picks a target length and gets `3` distinct reels
      - or AI picks one best target length and still gives `3` distinct reels
    - reserve "all durations and all variants" for an advanced mode later
+   - before production, make default heavy-video variant count tier/credit aware rather than always free
 21. Extend the lightweight long-video frame gallery:
    - keep the current compact contact-sheet grid tied to the active reel workspace
    - consider a secondary "full source top frames" mode only if users need broader exploration beyond the chosen story
    - keep download-one / download-all lightweight and avoid turning this into another heavy render workflow
+22. Add cost and business telemetry before final pricing:
+   - log per-album storage, egress, worker/render seconds, AI call/token usage, visual inputs, retry counts, and generated output footprint
+   - use this data to refine the `$9.99/month + credits` model and decide included limits
 
 ## Working Rules For Future Changes
 

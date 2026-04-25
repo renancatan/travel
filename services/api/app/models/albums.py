@@ -96,6 +96,10 @@ class GenerateReelFrameGalleryRequest(BaseModel):
     reel_draft: ReelDraftEditInput | None = None
 
 
+class StartMediaProcessingJobRequest(BaseModel):
+    force: bool = False
+
+
 class MediaItemResponse(BaseModel):
     id: str
     album_id: str
@@ -130,6 +134,31 @@ class MediaItemResponse(BaseModel):
     is_heavy_video: bool = False
     video_duration_tier: str | None = None
     video_resolution_tier: str | None = None
+    heavy_processing_job_id: str | None = None
+    heavy_processing_job_status: str | None = None
+    heavy_processing_job_stage: str | None = None
+    heavy_processing_job_progress_percent: int | None = None
+    heavy_processing_job_error: str | None = None
+    heavy_processing_job_created_at: str | None = None
+    heavy_processing_job_started_at: str | None = None
+    heavy_processing_job_completed_at: str | None = None
+    heavy_processing_proxy_relative_path: str | None = None
+    heavy_processing_proxy_content_type: str | None = None
+    heavy_processing_proxy_file_size_bytes: int | None = None
+    heavy_processing_strategy: str | None = None
+    heavy_processing_proxy_reason: str | None = None
+    heavy_processing_proxy_duration_seconds: float | None = None
+    heavy_processing_keyframe_duration_seconds: float | None = None
+    heavy_processing_total_duration_seconds: float | None = None
+    heavy_processing_output_file_size_bytes: int | None = None
+    heavy_processing_keyframe_relative_paths: list[str] = Field(default_factory=list)
+    heavy_processing_keyframe_timestamps_seconds: list[float] = Field(default_factory=list)
+    heavy_processing_keyframe_count: int = 0
+    heavy_processing_timeline_windows: list[dict] = Field(default_factory=list)
+    source_retention_policy: str | None = None
+    source_retention_recommendation: str | None = None
+    source_original_temporary_until: str | None = None
+    source_retention_estimated_gb_days: float | None = None
     detected_at: str
     created_at: str
 
@@ -140,6 +169,7 @@ class RenderedReelResponse(BaseModel):
     content_type: str
     file_size_bytes: int
     rendered_at: str
+    render_duration_seconds: float | None = None
     output_width: int
     output_height: int
     fps: int
@@ -206,6 +236,7 @@ class AlbumResponse(BaseModel):
     description: str | None
     description_meta: dict | None = None
     cached_suggestion: dict | None = None
+    proxy_cached_suggestion: dict | None = None
     map_entry: MapEntryResponse | None = None
     rendered_reel: RenderedReelResponse | None = None
     created_at: str

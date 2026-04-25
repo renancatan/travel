@@ -36,6 +36,31 @@ type MediaItem = {
   is_heavy_video: boolean;
   video_duration_tier: string | null;
   video_resolution_tier: string | null;
+  heavy_processing_job_id: string | null;
+  heavy_processing_job_status: string | null;
+  heavy_processing_job_stage: string | null;
+  heavy_processing_job_progress_percent: number | null;
+  heavy_processing_job_error: string | null;
+  heavy_processing_job_created_at: string | null;
+  heavy_processing_job_started_at: string | null;
+  heavy_processing_job_completed_at: string | null;
+  heavy_processing_proxy_relative_path: string | null;
+  heavy_processing_proxy_content_type: string | null;
+  heavy_processing_proxy_file_size_bytes: number | null;
+  heavy_processing_strategy: string | null;
+  heavy_processing_proxy_reason: string | null;
+  heavy_processing_proxy_duration_seconds: number | null;
+  heavy_processing_keyframe_duration_seconds: number | null;
+  heavy_processing_total_duration_seconds: number | null;
+  heavy_processing_output_file_size_bytes: number | null;
+  heavy_processing_keyframe_relative_paths: string[];
+  heavy_processing_keyframe_timestamps_seconds: number[];
+  heavy_processing_keyframe_count: number;
+  heavy_processing_timeline_windows: Array<Record<string, unknown>>;
+  source_retention_policy: string | null;
+  source_retention_recommendation: string | null;
+  source_original_temporary_until: string | null;
+  source_retention_estimated_gb_days: number | null;
   detected_at: string;
   created_at: string;
 };
@@ -46,6 +71,7 @@ type RenderedReel = {
   content_type: string;
   file_size_bytes: number;
   rendered_at: string;
+  render_duration_seconds?: number | null;
   output_width: number;
   output_height: number;
   fps: number;
@@ -110,6 +136,7 @@ type Album = {
     route?: Record<string, unknown> | null;
   } | null;
   cached_suggestion?: AlbumSuggestion | null;
+  proxy_cached_suggestion?: AlbumSuggestion | null;
   map_entry?: MapEntry | null;
   rendered_reel?: RenderedReel | null;
   created_at: string;
@@ -259,6 +286,7 @@ type RenderedVariant = {
   content_type: string;
   file_size_bytes: number;
   rendered_at: string;
+  render_duration_seconds?: number | null;
   output_width: number;
   output_height: number;
   fps: number;
@@ -700,6 +728,17 @@ function getRenderedVariantContentUrl(album: Album | null, renderedVariant: Rend
   return `${API_BASE_URL}/albums/${album.id}/rendered-variants/${renderedVariant.variant_id}/content?v=${cacheKey}`;
 }
 
+function getProxyRenderedVariantContentUrl(album: Album | null, renderedVariant: RenderedVariant | null): string | null {
+  if (!album || !renderedVariant) {
+    return null;
+  }
+
+  const cacheKey = encodeURIComponent(
+    `${renderedVariant.rendered_at}-${renderedVariant.file_size_bytes}-${renderedVariant.estimated_total_duration_seconds}`,
+  );
+  return `${API_BASE_URL}/albums/${album.id}/proxy-rendered-variants/${renderedVariant.variant_id}/content?v=${cacheKey}`;
+}
+
 function getReelFrameGalleryFrameUrl(
   album: Album | null,
   gallery: ReelFrameGallery | null,
@@ -730,6 +769,83 @@ function getMediaThumbnailUrl(mediaItem: MediaItem | null): string | null {
     return null;
   }
   return `${API_BASE_URL}/albums/${mediaItem.album_id}/media/${mediaItem.id}/thumbnail`;
+}
+
+function getMediaProcessingProxyUrl(mediaItem: MediaItem | null): string | null {
+  if (!mediaItem?.heavy_processing_proxy_relative_path) {
+    return null;
+  }
+  return `${API_BASE_URL}/albums/${mediaItem.album_id}/media/${mediaItem.id}/processing-proxy`;
+}
+
+function getMediaProcessingKeyframeUrl(mediaItem: MediaItem, frameNumber: number): string {
+  return `${API_BASE_URL}/albums/${mediaItem.album_id}/media/${mediaItem.id}/processing-keyframes/${frameNumber}`;
+}
+
+function shouldShowHeavyProcessingPanel(mediaItem: MediaItem): boolean {
+  if (mediaItem.media_kind !== "video") {
+    return false;
+  }
+  return Boolean(
+    mediaItem.analysis_strategy !== "interactive" ||
+      mediaItem.heavy_processing_job_status ||
+      (mediaItem.duration_seconds !== null && mediaItem.duration_seconds > 60),
+  );
+}
+
+function isHeavyProcessingActive(mediaItem: MediaItem): boolean {
+  return mediaItem.heavy_processing_job_status === "pending" || mediaItem.heavy_processing_job_status === "running";
+}
+
+function getProxyAnalysisTargets(album: Album | null): MediaItem[] {
+  if (!album) {
+    return [];
+  }
+  return album.media_items.filter(
+    (item) =>
+      item.media_kind === "video" &&
+      (shouldShowHeavyProcessingPanel(item) ||
+        item.heavy_processing_keyframe_count > 0 ||
+        item.heavy_processing_job_status === "completed"),
+  );
+}
+
+function isProxyAnalysisReady(album: Album | null): boolean {
+  return getProxyAnalysisTargets(album).some(
+    (item) => item.heavy_processing_job_status === "completed" && item.heavy_processing_keyframe_count > 0,
+  );
+}
+
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function formatHeavyProcessingStatus(mediaItem: MediaItem): string {
+  const status = mediaItem.heavy_processing_job_status;
+  if (!status) {
+    return "Not processed yet";
+  }
+  const stage = mediaItem.heavy_processing_job_stage ? ` • ${mediaItem.heavy_processing_job_stage}` : "";
+  if (status === "completed") {
+    return `Completed${stage}`;
+  }
+  if (status === "failed") {
+    return `Failed${stage}`;
+  }
+  if (status === "running") {
+    return `Running${stage}`;
+  }
+  return `Queued${stage}`;
+}
+
+function formatHeavyProcessingStrategy(value: string | null): string {
+  if (value === "direct_keyframes") {
+    return "Direct keyframes";
+  }
+  if (value === "proxy_keyframes") {
+    return "Proxy + keyframes";
+  }
+  return "Keyframe-first";
 }
 
 function normalizeAlbumName(value: string): string {
@@ -829,20 +945,21 @@ function upsertAlbum(albums: Album[], updatedAlbum: Album): Album[] {
   return albums.map((album) => (album.id === updatedAlbum.id ? updatedAlbum : album));
 }
 
-function removeAlbum(albums: Album[], albumId: string): Album[] {
-  return albums.filter((album) => album.id !== albumId);
-}
-
 function buildAlbumCaches(albums: Album[]): {
   suggestions: Record<string, AlbumSuggestion>;
+  proxySuggestions: Record<string, AlbumSuggestion>;
   descriptionMeta: Record<string, DescriptionMeta>;
 } {
   const nextSuggestions: Record<string, AlbumSuggestion> = {};
+  const nextProxySuggestions: Record<string, AlbumSuggestion> = {};
   const nextDescriptionMeta: Record<string, DescriptionMeta> = {};
 
   for (const album of albums) {
     if (album.cached_suggestion) {
       nextSuggestions[album.id] = album.cached_suggestion;
+    }
+    if (album.proxy_cached_suggestion) {
+      nextProxySuggestions[album.id] = album.proxy_cached_suggestion;
     }
     if (album.description_meta) {
       nextDescriptionMeta[album.id] = {
@@ -854,6 +971,7 @@ function buildAlbumCaches(albums: Album[]): {
 
   return {
     suggestions: nextSuggestions,
+    proxySuggestions: nextProxySuggestions,
     descriptionMeta: nextDescriptionMeta,
   };
 }
@@ -1235,6 +1353,7 @@ export default function Page() {
   const [manualDescription, setManualDescription] = useState("");
   const [descriptionMetaByAlbum, setDescriptionMetaByAlbum] = useState<Record<string, DescriptionMeta>>({});
   const [suggestionsByAlbum, setSuggestionsByAlbum] = useState<Record<string, AlbumSuggestion>>({});
+  const [proxySuggestionsByAlbum, setProxySuggestionsByAlbum] = useState<Record<string, AlbumSuggestion>>({});
   const [status, setStatus] = useState<{ tone: "idle" | "ok" | "error"; message: string }>({
     tone: "idle",
     message: "Start by choosing a target album. Upload, description, and AI review will follow in order.",
@@ -1253,11 +1372,15 @@ export default function Page() {
   });
   const [isCreatingAlbum, setIsCreatingAlbum] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isProxyAnalyzing, setIsProxyAnalyzing] = useState(false);
   const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
   const [isSavingDescription, setIsSavingDescription] = useState(false);
   const [autoRebuiltSuggestionAlbumIds, setAutoRebuiltSuggestionAlbumIds] = useState<Record<string, boolean>>({});
   const [deletingAlbumId, setDeletingAlbumId] = useState<string | null>(null);
+  const [selectedAlbumIds, setSelectedAlbumIds] = useState<string[]>([]);
+  const [isDeletingSelectedAlbums, setIsDeletingSelectedAlbums] = useState(false);
   const [deletingMediaId, setDeletingMediaId] = useState<string | null>(null);
+  const [processingMediaId, setProcessingMediaId] = useState<string | null>(null);
   const [isRenderingReel, setIsRenderingReel] = useState(false);
   const [isSavingReelDraft, setIsSavingReelDraft] = useState(false);
   const [isSavingReelDraftVersion, setIsSavingReelDraftVersion] = useState(false);
@@ -1265,6 +1388,7 @@ export default function Page() {
   const [editableReelDraft, setEditableReelDraft] = useState<ReelDraft | null>(null);
   const [selectedEditorVariantId, setSelectedEditorVariantId] = useState<string | null>(null);
   const [isRenderingVariantSet, setIsRenderingVariantSet] = useState(false);
+  const [isRenderingProxyVariantSet, setIsRenderingProxyVariantSet] = useState(false);
   const [isReelFrameGalleryOpen, setIsReelFrameGalleryOpen] = useState(false);
   const [isLoadingReelFrameGallery, setIsLoadingReelFrameGallery] = useState(false);
   const [reelFrameGallery, setReelFrameGallery] = useState<ReelFrameGallery | null>(null);
@@ -1299,8 +1423,11 @@ export default function Page() {
   const workflowAlbum =
     albumMode === "new" ? albums.find((album) => album.id === newAlbumId) ?? null : sidebarAlbum;
   const activeSuggestions = workflowAlbum ? suggestionsByAlbum[workflowAlbum.id] ?? null : null;
+  const activeProxySuggestions = workflowAlbum ? proxySuggestionsByAlbum[workflowAlbum.id] ?? null : null;
   const suggestedReelVariants = activeSuggestions?.reel_draft_variants ?? [];
+  const proxySuggestedReelVariants = activeProxySuggestions?.reel_draft_variants ?? [];
   const renderedVariantRenders = activeSuggestions?.rendered_variant_renders ?? [];
+  const renderedProxyVariantRenders = activeProxySuggestions?.rendered_variant_renders ?? [];
   const savedReelDraftVersions = activeSuggestions?.reel_draft_versions ?? [];
   const activeReelVariantSummary = activeSuggestions?.reel_variant_request_summary ?? null;
   const activeDescriptionMeta = workflowAlbum ? descriptionMetaByAlbum[workflowAlbum.id] ?? null : null;
@@ -1319,14 +1446,20 @@ export default function Page() {
   const renderSpec =
     !isReelDraftDirty && workingReelDraft?.render_spec ? workingReelDraft.render_spec : activeSuggestions?.reel_draft?.render_spec ?? null;
   const renderBackendAvailable = Boolean(renderSpec?.backend_available);
+  const proxyRenderSpec =
+    activeProxySuggestions?.reel_draft?.render_spec ?? proxySuggestedReelVariants[0]?.reel_draft.render_spec ?? null;
+  const proxyRenderBackendAvailable = Boolean(proxyRenderSpec?.backend_available);
   const uploadTargetAlbum = workflowAlbum;
   const showUploadStep = Boolean(uploadTargetAlbum);
   const showPostUploadSteps = Boolean(workflowAlbum && workflowAlbum.media_items.length > 0);
+  const hasActiveHeavyProcessingJobs = Boolean(workflowAlbum?.media_items.some(isHeavyProcessingActive));
   const selectedReelPreset = reelVariantPresets.find((preset) => preset.variant_id === selectedReelPresetId) ?? null;
   const duplicateAlbum =
     albumMode === "new" && !newAlbumId && name.trim()
       ? albums.find((album) => normalizeAlbumName(album.name) === normalizeAlbumName(name))
       : null;
+  const selectedBulkAlbumIds = selectedAlbumIds.filter((albumId) => albums.some((album) => album.id === albumId));
+  const allAlbumsSelected = albums.length > 0 && selectedBulkAlbumIds.length === albums.length;
   const reelFrameGallerySignature = buildReelFrameGallerySignature(selectedEditorVariantId, workingReelDraft);
   const gpsMediaItems = getGpsMediaItems(workflowAlbum);
   const chosenReelMediaIds = extractReelDraftSelectedMediaIds(workingReelDraft);
@@ -1402,6 +1535,7 @@ export default function Page() {
       setAlbums(data);
       const caches = buildAlbumCaches(data);
       setSuggestionsByAlbum(caches.suggestions);
+      setProxySuggestionsByAlbum(caches.proxySuggestions);
       setDescriptionMetaByAlbum(caches.descriptionMeta);
       setAlbumsStatus({ tone: "idle", message: "" });
 
@@ -1476,6 +1610,18 @@ export default function Page() {
           return next;
         });
       }
+      if (data.proxy_cached_suggestion) {
+        setProxySuggestionsByAlbum((current) => ({
+          ...current,
+          [data.id]: data.proxy_cached_suggestion as AlbumSuggestion,
+        }));
+      } else {
+        setProxySuggestionsByAlbum((current) => {
+          const next = { ...current };
+          delete next[data.id];
+          return next;
+        });
+      }
       if (data.description_meta) {
         setDescriptionMetaByAlbum((current) => ({
           ...current,
@@ -1511,6 +1657,19 @@ export default function Page() {
       }));
     } else {
       setSuggestionsByAlbum((current) => {
+        const next = { ...current };
+        delete next[updatedAlbum.id];
+        return next;
+      });
+    }
+
+    if (updatedAlbum.proxy_cached_suggestion) {
+      setProxySuggestionsByAlbum((current) => ({
+        ...current,
+        [updatedAlbum.id]: updatedAlbum.proxy_cached_suggestion as AlbumSuggestion,
+      }));
+    } else {
+      setProxySuggestionsByAlbum((current) => {
         const next = { ...current };
         delete next[updatedAlbum.id];
         return next;
@@ -1949,6 +2108,17 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    if (!workflowAlbum?.id || !hasActiveHeavyProcessingJobs) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void fetchAlbum(workflowAlbum.id);
+    }, 4000);
+    return () => window.clearInterval(intervalId);
+  }, [workflowAlbum?.id, hasActiveHeavyProcessingJobs]);
+
+  useEffect(() => {
     const storedDraft = window.localStorage.getItem(NEW_ALBUM_DRAFT_KEY);
     if (!storedDraft) {
       return;
@@ -2258,11 +2428,44 @@ export default function Page() {
       delete next[albumId];
       return next;
     });
+    setProxySuggestionsByAlbum((current) => {
+      const next = { ...current };
+      delete next[albumId];
+      return next;
+    });
     setDescriptionMetaByAlbum((current) => {
       const next = { ...current };
       delete next[albumId];
       return next;
     });
+  }
+
+  function toggleAlbumSelection(albumId: string) {
+    setSelectedAlbumIds((current) =>
+      current.includes(albumId) ? current.filter((selectedId) => selectedId !== albumId) : [...current, albumId],
+    );
+  }
+
+  function toggleAllAlbumSelection() {
+    setSelectedAlbumIds(allAlbumsSelected ? [] : albums.map((album) => album.id));
+  }
+
+  function removeDeletedAlbumsFromLocalState(deletedAlbumIds: string[]) {
+    if (deletedAlbumIds.length === 0) {
+      return;
+    }
+    const deletedIdSet = new Set(deletedAlbumIds);
+    setAlbums((current) => current.filter((album) => !deletedIdSet.has(album.id)));
+    setSelectedAlbumIds((current) => current.filter((albumId) => !deletedIdSet.has(albumId)));
+    deletedAlbumIds.forEach((albumId) => clearAlbumDerivedState(albumId));
+    clearUploadSelection();
+
+    if (selectedAlbumId && deletedIdSet.has(selectedAlbumId)) {
+      setSelectedAlbumId(null);
+    }
+    if (newAlbumId && deletedIdSet.has(newAlbumId)) {
+      resetNewAlbumFlow();
+    }
   }
 
   function handleFileSelection(event: ChangeEvent<HTMLInputElement>) {
@@ -2379,6 +2582,124 @@ export default function Page() {
       });
     } finally {
       setIsAnalyzing(false);
+    }
+  }
+
+  async function waitForProxyProcessingJobs(albumId: string, targetMediaIds: string[]): Promise<Album> {
+    for (let attempt = 0; attempt < 540; attempt += 1) {
+      const latestAlbum = await fetchAlbum(albumId);
+      if (!latestAlbum) {
+        throw new Error("Could not refresh album while proxy processing was running.");
+      }
+
+      const targets = latestAlbum.media_items.filter((item) => targetMediaIds.includes(item.id));
+      const failedTarget = targets.find((item) => item.heavy_processing_job_status === "failed");
+      if (failedTarget) {
+        throw new Error(
+          failedTarget.heavy_processing_job_error ||
+            `Proxy processing failed for "${failedTarget.original_filename}".`,
+        );
+      }
+
+      const allReady = targets.every(
+        (item) => item.heavy_processing_job_status === "completed" && item.heavy_processing_keyframe_count > 0,
+      );
+      if (allReady) {
+        return latestAlbum;
+      }
+
+      await sleep(5000);
+    }
+
+    throw new Error("Keyframe/proxy processing is still running. Try the hybrid analysis again after it finishes.");
+  }
+
+  async function prepareProxyAnalysis(album: Album): Promise<Album> {
+    const targets = getProxyAnalysisTargets(album);
+    if (!targets.length) {
+      throw new Error("This album does not have a heavy video to run through the proxy comparison path.");
+    }
+
+    const unfinishedTargets = targets.filter(
+      (item) => !(item.heavy_processing_job_status === "completed" && item.heavy_processing_keyframe_count > 0),
+    );
+    if (!unfinishedTargets.length) {
+      return album;
+    }
+
+    const jobsToStart = unfinishedTargets.filter((item) => !isHeavyProcessingActive(item));
+    for (const item of jobsToStart) {
+      const response = await fetch(`${API_BASE_URL}/albums/${album.id}/media/${item.id}/processing-job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: false }),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not start proxy processing for "${item.original_filename}".`);
+      }
+    }
+
+    setSuggestionStatus({
+      tone: "idle",
+      message:
+        jobsToStart.length > 0
+          ? "Keyframe/proxy processing started. The hybrid analysis will continue after it finishes."
+          : "Waiting for the active keyframe/proxy processing job to finish...",
+    });
+
+    return waitForProxyProcessingJobs(
+      album.id,
+      unfinishedTargets.map((item) => item.id),
+    );
+  }
+
+  async function runProxyAiSuggestions(albumId: string) {
+    if (!workflowAlbum) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album before running the proxy comparison read.",
+      });
+      return;
+    }
+
+    setIsProxyAnalyzing(true);
+    setSuggestionStatus({
+      tone: "idle",
+      message: isProxyAnalysisReady(workflowAlbum)
+        ? "Running hybrid proxy AI review..."
+        : "Preparing heavy video keyframes/proxy before the hybrid proxy AI review...",
+    });
+
+    try {
+      const preparedAlbum = await prepareProxyAnalysis(workflowAlbum);
+      const { requestBody, selectionLabel } = buildReelSuggestionRequestBody();
+      const response = await fetch(`${API_BASE_URL}/albums/${albumId}/proxy-suggestions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(requestBody),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Hybrid proxy AI review failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as AlbumSuggestion;
+      setProxySuggestionsByAlbum((current) => ({ ...current, [albumId]: data }));
+      await fetchAlbum(preparedAlbum.id);
+      setSuggestionStatus({
+        tone: "ok",
+        message: `Hybrid proxy AI review updated for ${selectionLabel}. Render the hybrid proxy reels below to compare.`,
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Hybrid proxy AI review failed.",
+      });
+    } finally {
+      setIsProxyAnalyzing(false);
     }
   }
 
@@ -2596,16 +2917,7 @@ export default function Page() {
         throw new Error(`Album delete failed (${response.status})`);
       }
 
-      setAlbums((current) => removeAlbum(current, album.id));
-      clearAlbumDerivedState(album.id);
-      clearUploadSelection();
-
-      if (selectedAlbumId === album.id) {
-        setSelectedAlbumId(null);
-      }
-      if (newAlbumId === album.id) {
-        resetNewAlbumFlow();
-      }
+      removeDeletedAlbumsFromLocalState([album.id]);
 
       setDescriptionStatus({
         tone: "idle",
@@ -2626,6 +2938,69 @@ export default function Page() {
       });
     } finally {
       setDeletingAlbumId(null);
+    }
+  }
+
+  async function handleDeleteSelectedAlbums() {
+    const selectedAlbums = albums.filter((album) => selectedBulkAlbumIds.includes(album.id));
+    if (selectedAlbums.length === 0) {
+      setStatus({
+        tone: "error",
+        message: "Select at least one album before deleting.",
+      });
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Delete ${selectedAlbums.length} selected album(s) and all uploaded media/rendered outputs? This cannot be undone.`,
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsDeletingSelectedAlbums(true);
+    const deletedAlbumIds: string[] = [];
+    setStatus({
+      tone: "idle",
+      message: `Deleting ${selectedAlbums.length} selected album(s)...`,
+    });
+
+    try {
+      for (const album of selectedAlbums) {
+        setDeletingAlbumId(album.id);
+        const response = await fetch(`${API_BASE_URL}/albums/${album.id}`, {
+          method: "DELETE",
+        });
+
+        if (!response.ok) {
+          throw new Error(`Album delete failed for "${album.name}" (${response.status})`);
+        }
+
+        deletedAlbumIds.push(album.id);
+      }
+
+      removeDeletedAlbumsFromLocalState(deletedAlbumIds);
+      setDescriptionStatus({
+        tone: "idle",
+        message: "Create or pick an album first. Description comes only after media upload.",
+      });
+      setSuggestionStatus({
+        tone: "idle",
+        message: "AI review will unlock after an album is chosen and media has been uploaded.",
+      });
+      setStatus({
+        tone: "ok",
+        message: `Deleted ${deletedAlbumIds.length} album(s).`,
+      });
+    } catch (error) {
+      removeDeletedAlbumsFromLocalState(deletedAlbumIds);
+      setStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Selected album delete failed.",
+      });
+    } finally {
+      setDeletingAlbumId(null);
+      setIsDeletingSelectedAlbums(false);
     }
   }
 
@@ -2678,6 +3053,45 @@ export default function Page() {
       });
     } finally {
       setDeletingMediaId(null);
+    }
+  }
+
+  async function handleStartHeavyProcessing(item: MediaItem, options?: { force?: boolean }) {
+    if (!workflowAlbum) {
+      setStatus({ tone: "error", message: "Choose an album before starting video processing." });
+      return;
+    }
+
+    setProcessingMediaId(item.id);
+    setStatus({
+      tone: "idle",
+      message: `${options?.force ? "Rebuilding" : "Starting"} processing for "${item.original_filename}"...`,
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/media/${item.id}/processing-job`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force: Boolean(options?.force) }),
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Video processing failed to start (${response.status})`);
+      }
+
+      await fetchAlbum(workflowAlbum.id);
+      setStatus({
+        tone: "ok",
+        message: `Processing job queued for "${item.original_filename}". The album will refresh while it runs.`,
+      });
+    } catch (error) {
+      setStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Video processing failed to start.",
+      });
+    } finally {
+      setProcessingMediaId(null);
     }
   }
 
@@ -2946,6 +3360,63 @@ export default function Page() {
       });
     } finally {
       setIsRenderingVariantSet(false);
+    }
+  }
+
+  async function handleRenderProxyReelVariants() {
+    if (!workflowAlbum) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album first. There is no proxy reel variant set to compare yet.",
+      });
+      return;
+    }
+
+    if (!proxySuggestedReelVariants.length) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Run the hybrid proxy AI review first so there are proxy detail variants available.",
+      });
+      return;
+    }
+
+    if (!proxyRenderBackendAvailable) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Local reel rendering is disabled because ffmpeg is not installed on this machine yet.",
+      });
+      return;
+    }
+
+    setIsRenderingProxyVariantSet(true);
+    setSuggestionStatus({
+      tone: "idle",
+      message: "Rendering hybrid proxy reel variants for side-by-side comparison...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/proxy-rendered-variants`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Could not render proxy reel variants (${response.status})`);
+      }
+
+      const updatedAlbum = (await response.json()) as Album;
+      syncAlbumStateFromApi(updatedAlbum);
+      setSuggestionStatus({
+        tone: "ok",
+        message: "Hybrid proxy reel variants are rendered. Compare them against the standard set below.",
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Could not render the proxy reel variants.",
+      });
+    } finally {
+      setIsRenderingProxyVariantSet(false);
     }
   }
 
@@ -3257,6 +3728,36 @@ export default function Page() {
     });
   }
 
+  function handleDownloadProxyRenderedVariant(renderedVariant: RenderedVariant) {
+    if (!workflowAlbum) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album first. There is no hybrid proxy compare reel to download yet.",
+      });
+      return;
+    }
+
+    const renderedVariantUrl = getProxyRenderedVariantContentUrl(workflowAlbum, renderedVariant);
+    if (!renderedVariantUrl) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Rendered hybrid proxy compare reel URL is not available yet.",
+      });
+      return;
+    }
+
+    const link = document.createElement("a");
+    link.href = renderedVariantUrl;
+    link.download = `${renderedVariant.draft_name}.mp4`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setSuggestionStatus({
+      tone: "ok",
+      message: `Downloading "${renderedVariant.label}" hybrid proxy compare reel.`,
+    });
+  }
+
   async function loadReelFrameGallery(options?: { openAfterLoad?: boolean }) {
     if (!workflowAlbum || !workingReelDraft) {
       setReelFrameGalleryError("Choose or open one reel first before extracting frames.");
@@ -3442,6 +3943,28 @@ export default function Page() {
             </div>
           ) : null}
 
+          {albums.length > 0 ? (
+            <div className="album-selection-toolbar">
+              <label className="album-select-all">
+                <input
+                  checked={allAlbumsSelected}
+                  disabled={isDeletingSelectedAlbums}
+                  onChange={toggleAllAlbumSelection}
+                  type="checkbox"
+                />
+                <span>Select all</span>
+              </label>
+              <button
+                className="button-danger button-chip"
+                disabled={selectedBulkAlbumIds.length === 0 || isDeletingSelectedAlbums}
+                onClick={() => void handleDeleteSelectedAlbums()}
+                type="button"
+              >
+                {isDeletingSelectedAlbums ? "Deleting..." : `Delete selected (${selectedBulkAlbumIds.length})`}
+              </button>
+            </div>
+          ) : null}
+
           <div className="album-list">
             {albums.length === 0 ? (
               <div className="empty">
@@ -3449,17 +3972,27 @@ export default function Page() {
               </div>
             ) : (
               albums.map((album) => (
-                <button
-                  key={album.id}
-                  className={`album-button ${selectedAlbumId === album.id ? "active" : ""}`}
-                  onClick={() => void handleSidebarSelection(album.id)}
-                  type="button"
-                >
-                  <strong>{album.name}</strong>
-                  <small>
-                    {album.media_items.length} item(s) • updated {formatDate(album.updated_at)}
-                  </small>
-                </button>
+                <div className={`album-row ${selectedAlbumId === album.id ? "active" : ""}`} key={album.id}>
+                  <label className="album-select">
+                    <input
+                      aria-label={`Select ${album.name} for deletion`}
+                      checked={selectedBulkAlbumIds.includes(album.id)}
+                      disabled={isDeletingSelectedAlbums}
+                      onChange={() => toggleAlbumSelection(album.id)}
+                      type="checkbox"
+                    />
+                  </label>
+                  <button
+                    className={`album-button ${selectedAlbumId === album.id ? "active" : ""}`}
+                    onClick={() => void handleSidebarSelection(album.id)}
+                    type="button"
+                  >
+                    <strong>{album.name}</strong>
+                    <small>
+                      {album.media_items.length} item(s) • updated {formatDate(album.updated_at)}
+                    </small>
+                  </button>
+                </div>
               ))
             )}
           </div>
@@ -3843,14 +4376,28 @@ export default function Page() {
                           : "Run the AI review when you want the first read of this album."}
                       </span>
                     </div>
-                    <button
-                      className="button-primary"
-                      disabled={isAnalyzing}
-                      onClick={() => void runAiSuggestions(workflowAlbum.id)}
-                      type="button"
-                    >
-                      {isAnalyzing ? "Analyzing..." : activeSuggestions ? "Refresh AI read" : "Analyze album"}
-                    </button>
+                    <div className="analysis-button-stack">
+                      <button
+                        className="button-primary"
+                        disabled={isAnalyzing}
+                        onClick={() => void runAiSuggestions(workflowAlbum.id)}
+                        type="button"
+                      >
+                        {isAnalyzing ? "Analyzing..." : activeSuggestions ? "Refresh AI read" : "Analyze album"}
+                      </button>
+                      <button
+                        className="button-secondary"
+                        disabled={isProxyAnalyzing}
+                        onClick={() => void runProxyAiSuggestions(workflowAlbum.id)}
+                        type="button"
+                      >
+                        {isProxyAnalyzing
+                          ? "Running hybrid read..."
+                          : activeProxySuggestions
+                            ? "Refresh hybrid proxy"
+                            : "Analyze hybrid proxy"}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="selected-album-card ai-variant-request-card">
@@ -4335,6 +4882,91 @@ export default function Page() {
                           <p>No AI reel variants yet.</p>
                         )}
                       </div>
+                      {activeProxySuggestions ? (
+                        <div className="ai-card ai-card-wide proxy-compare-card">
+                          <div className="reel-plan-header">
+                            <div>
+                              <strong>Hybrid proxy reel variants</strong>
+                              <p>
+                                Standard story structure with proxy-discovered detail beats. Analysis mode:{" "}
+                                {activeProxySuggestions.analysis_mode}.
+                              </p>
+                            </div>
+                            {proxySuggestedReelVariants.length > 0 ? (
+                              <div className="actions">
+                                <button
+                                  className="button-secondary"
+                                  disabled={!proxyRenderBackendAvailable || isRenderingProxyVariantSet}
+                                  onClick={() => void handleRenderProxyReelVariants()}
+                                  type="button"
+                                >
+                                  {isRenderingProxyVariantSet
+                                    ? "Rendering hybrid reels..."
+                                    : renderedProxyVariantRenders.length > 0
+                                      ? "Re-render hybrid reels"
+                                      : "Render hybrid reels"}
+                                </button>
+                              </div>
+                            ) : null}
+                          </div>
+                          {proxySuggestedReelVariants.length > 0 ? (
+                            <div className="candidate-list">
+                              {proxySuggestedReelVariants.map((variant) => {
+                                const renderedVariant = renderedProxyVariantRenders.find(
+                                  (item) => item.variant_id === variant.variant_id,
+                                );
+                                const renderedVariantUrl = getProxyRenderedVariantContentUrl(workflowAlbum, renderedVariant ?? null);
+                                return (
+                                  <div className="variant-render-card proxy-render-card" key={variant.variant_id}>
+                                    <div className="variant-render-card-header">
+                                      <div>
+                                        <strong>{variant.label}</strong>
+                                        <span>
+                                          {formatDuration(variant.target_duration_seconds)} • {variant.creative_angle} •{" "}
+                                          {formatVideoStrategy(variant.reel_draft.video_strategy)}
+                                        </span>
+                                        <span>
+                                          {variant.reel_draft.steps.length} beat(s) • {variant.reel_draft.title}
+                                        </span>
+                                        {renderedVariant ? (
+                                          <span>
+                                            Ready at {formatDate(renderedVariant.rendered_at)} •{" "}
+                                            {formatDuration(renderedVariant.estimated_total_duration_seconds)} •{" "}
+                                            {formatBytes(renderedVariant.file_size_bytes)}
+                                          </span>
+                                        ) : (
+                                          <span>Render the hybrid proxy variants to preview this version.</span>
+                                        )}
+                                      </div>
+                                      <div className="actions">
+                                        <button
+                                          className="button-secondary button-chip"
+                                          disabled={!renderedVariant}
+                                          onClick={() =>
+                                            renderedVariant
+                                              ? handleDownloadProxyRenderedVariant(renderedVariant)
+                                              : undefined
+                                          }
+                                          type="button"
+                                        >
+                                          Download
+                                        </button>
+                                      </div>
+                                    </div>
+                                    {renderedVariantUrl ? (
+                                      <div className="render-preview variant-render-preview">
+                                        <video controls preload="metadata" src={renderedVariantUrl} />
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p>No proxy reel variants yet.</p>
+                          )}
+                        </div>
+                      ) : null}
                       {showReelFrameGalleryPanel ? (
                         <div className="ai-card ai-card-wide">
                           <div className="reel-frame-gallery-panel">
@@ -5037,6 +5669,91 @@ export default function Page() {
                       </div>
                     </div>
                   ) : null}
+                  {!activeSuggestions && activeProxySuggestions ? (
+                    <div className="ai-grid">
+                      <div className="ai-card ai-card-wide proxy-compare-card">
+                        <div className="reel-plan-header">
+                          <div>
+                            <strong>Hybrid proxy reel variants</strong>
+                            <p>
+                              Standard story structure with proxy-discovered detail beats. Analysis mode:{" "}
+                              {activeProxySuggestions.analysis_mode}.
+                            </p>
+                          </div>
+                          {proxySuggestedReelVariants.length > 0 ? (
+                            <div className="actions">
+                              <button
+                                className="button-secondary"
+                                disabled={!proxyRenderBackendAvailable || isRenderingProxyVariantSet}
+                                onClick={() => void handleRenderProxyReelVariants()}
+                                type="button"
+                              >
+                                {isRenderingProxyVariantSet
+                                  ? "Rendering hybrid reels..."
+                                  : renderedProxyVariantRenders.length > 0
+                                    ? "Re-render hybrid reels"
+                                    : "Render hybrid reels"}
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                        {proxySuggestedReelVariants.length > 0 ? (
+                          <div className="candidate-list">
+                            {proxySuggestedReelVariants.map((variant) => {
+                              const renderedVariant = renderedProxyVariantRenders.find(
+                                (item) => item.variant_id === variant.variant_id,
+                              );
+                              const renderedVariantUrl = getProxyRenderedVariantContentUrl(workflowAlbum, renderedVariant ?? null);
+                              return (
+                                <div className="variant-render-card proxy-render-card" key={variant.variant_id}>
+                                  <div className="variant-render-card-header">
+                                    <div>
+                                      <strong>{variant.label}</strong>
+                                      <span>
+                                        {formatDuration(variant.target_duration_seconds)} • {variant.creative_angle} •{" "}
+                                        {formatVideoStrategy(variant.reel_draft.video_strategy)}
+                                      </span>
+                                      <span>
+                                        {variant.reel_draft.steps.length} beat(s) • {variant.reel_draft.title}
+                                      </span>
+                                      {renderedVariant ? (
+                                        <span>
+                                          Ready at {formatDate(renderedVariant.rendered_at)} •{" "}
+                                          {formatDuration(renderedVariant.estimated_total_duration_seconds)} •{" "}
+                                          {formatBytes(renderedVariant.file_size_bytes)}
+                                        </span>
+                                      ) : (
+                                        <span>Render the hybrid proxy variants to preview this version.</span>
+                                      )}
+                                    </div>
+                                    <div className="actions">
+                                      <button
+                                        className="button-secondary button-chip"
+                                        disabled={!renderedVariant}
+                                        onClick={() =>
+                                          renderedVariant ? handleDownloadProxyRenderedVariant(renderedVariant) : undefined
+                                        }
+                                        type="button"
+                                      >
+                                        Download
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {renderedVariantUrl ? (
+                                    <div className="render-preview variant-render-preview">
+                                      <video controls preload="metadata" src={renderedVariantUrl} />
+                                    </div>
+                                  ) : null}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p>No proxy reel variants yet.</p>
+                        )}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -5395,6 +6112,13 @@ export default function Page() {
                     ? `${API_BASE_URL}/albums/${item.album_id}/media/${item.id}/thumbnail`
                     : undefined;
                   const insight = getInsightForMedia(item.id);
+                  const showHeavyProcessing = shouldShowHeavyProcessingPanel(item);
+                  const processingIsActive = isHeavyProcessingActive(item);
+                  const processingProgress = item.heavy_processing_job_progress_percent ?? 0;
+                  const processingProxyUrl = getMediaProcessingProxyUrl(item);
+                  const keyframeNumbers = item.heavy_processing_keyframe_relative_paths
+                    .slice(0, 6)
+                    .map((_, index) => index + 1);
 
                   return (
                     <article className="media-card" key={item.id}>
@@ -5440,6 +6164,88 @@ export default function Page() {
                           <div className={`ai-inline-note processing-note processing-note-${item.processing_profile ?? "standard"}`}>
                             <strong>{item.processing_profile_label}</strong>
                             <span>{item.processing_recommendation ?? "Use the normal interactive album flow."}</span>
+                          </div>
+                        ) : null}
+
+                        {showHeavyProcessing ? (
+                          <div className="heavy-processing-panel">
+                            <div className="heavy-processing-header">
+                              <div>
+                                <strong>Heavy processing</strong>
+                                <span>{formatHeavyProcessingStatus(item)}</span>
+                              </div>
+                              <button
+                                className="button-secondary button-chip"
+                                disabled={processingMediaId === item.id || processingIsActive}
+                                onClick={() =>
+                                  void handleStartHeavyProcessing(item, {
+                                    force: item.heavy_processing_job_status === "completed" || item.heavy_processing_job_status === "failed",
+                                  })
+                                }
+                                type="button"
+                              >
+                                {processingMediaId === item.id
+                                  ? "Starting..."
+                                  : item.heavy_processing_job_status === "completed"
+                                    ? "Rebuild"
+                                    : item.heavy_processing_job_status === "failed"
+                                      ? "Retry"
+                                      : processingIsActive
+                                        ? "Processing..."
+                                        : "Start"}
+                              </button>
+                            </div>
+                            <div className="heavy-processing-progress" aria-label="Heavy processing progress">
+                              <span style={{ width: `${Math.max(0, Math.min(100, processingProgress))}%` }} />
+                            </div>
+                            {item.source_retention_recommendation ? (
+                              <p className="heavy-processing-note">{item.source_retention_recommendation}</p>
+                            ) : null}
+                            {item.heavy_processing_job_error ? (
+                              <div className="status error">{item.heavy_processing_job_error}</div>
+                            ) : null}
+                            {processingProxyUrl || item.heavy_processing_keyframe_count > 0 ? (
+                              <div className="heavy-processing-output">
+                                <div className="heavy-processing-output-meta">
+                                  <span>{formatHeavyProcessingStrategy(item.heavy_processing_strategy)}</span>
+                                  {processingProxyUrl ? (
+                                    <a className="button-secondary button-chip" href={processingProxyUrl} rel="noreferrer" target="_blank">
+                                      Open proxy
+                                    </a>
+                                  ) : null}
+                                  {item.heavy_processing_proxy_file_size_bytes ? (
+                                    <span>Proxy {formatBytes(item.heavy_processing_proxy_file_size_bytes)}</span>
+                                  ) : null}
+                                  {item.heavy_processing_timeline_windows.length > 0 ? (
+                                    <span>{item.heavy_processing_timeline_windows.length} timeline windows</span>
+                                  ) : null}
+                                  {item.heavy_processing_total_duration_seconds !== null ? (
+                                    <span>{formatDuration(item.heavy_processing_total_duration_seconds)} processed</span>
+                                  ) : null}
+                                  {item.heavy_processing_output_file_size_bytes !== null ? (
+                                    <span>{formatBytes(item.heavy_processing_output_file_size_bytes)} outputs</span>
+                                  ) : null}
+                                  {item.source_retention_estimated_gb_days !== null && item.source_retention_estimated_gb_days > 0 ? (
+                                    <span>{item.source_retention_estimated_gb_days.toFixed(1)} GB-days original</span>
+                                  ) : null}
+                                </div>
+                                {item.heavy_processing_proxy_reason ? (
+                                  <p className="heavy-processing-note">{item.heavy_processing_proxy_reason}</p>
+                                ) : null}
+                                {keyframeNumbers.length > 0 ? (
+                                  <div className="heavy-keyframe-grid">
+                                    {keyframeNumbers.map((frameNumber) => (
+                                      <img
+                                        alt=""
+                                        aria-hidden="true"
+                                        key={frameNumber}
+                                        src={getMediaProcessingKeyframeUrl(item, frameNumber)}
+                                      />
+                                    ))}
+                                  </div>
+                                ) : null}
+                              </div>
+                            ) : null}
                           </div>
                         ) : null}
 
@@ -5512,6 +6318,12 @@ export default function Page() {
                             <div className="meta-card">
                               <strong>AI video frames</strong>
                               <span>{item.analysis_frame_count} sampled</span>
+                            </div>
+                          ) : null}
+                          {item.heavy_processing_keyframe_count > 0 ? (
+                            <div className="meta-card">
+                              <strong>Server keyframes</strong>
+                              <span>{item.heavy_processing_keyframe_count} extracted</span>
                             </div>
                           ) : null}
                           {item.captured_at ? (

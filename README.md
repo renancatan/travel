@@ -30,6 +30,7 @@ The goal of this repo is to help turn messy trip media from phone, drone, and ac
 - [PROJECT_LOG.md](/home/renancatan/renan/projects/travel/PROJECT_LOG.md)
 - [docs/architecture.md](/home/renancatan/renan/projects/travel/docs/architecture.md)
 - [docs/deployment.md](/home/renancatan/renan/projects/travel/docs/deployment.md)
+- [docs/business-decisions.md](/home/renancatan/renan/projects/travel/docs/business-decisions.md)
 - [apps/web/README.md](/home/renancatan/renan/projects/travel/apps/web/README.md)
 - [services/api/README.md](/home/renancatan/renan/projects/travel/services/api/README.md)
 - [workers/media/README.md](/home/renancatan/renan/projects/travel/workers/media/README.md)

@@ -29,6 +29,15 @@ As of `2026-04-12`:
   - preview uploaded images through the API
   - request AI suggestions from the backend for album summary, likely categories, caption ideas, and per-image notes
 
+Recent progress as of `2026-04-25`:
+
+- the local app now has a first heavy-video processing lane with persisted job state, `ffmpeg` proxy generation, server keyframes, and timeline windows
+- standard album analysis and proxy/heavy analysis are separate cached outputs so real albums can compare the normal path against the heavier discovery path
+- `petar55` testing showed standard reels are still the better default, while proxy analysis is useful for discovering hidden detail beats
+- first proxy-quality tuning now gives proxy analysis more video keyframes, cheap keyframe ranking/diversity, and a hybrid cap so proxy reels keep some still/story structure
+- `petar56` testing moved the proxy comparison lane to `Proxy Hybrid` variants: keep the standard reel structure and inject a small number of ranked proxy-discovered detail beats
+- business/pricing direction now lives in `docs/business-decisions.md`, with long originals treated as temporary processing inputs unless archive storage is explicitly paid or credit-consuming
+
 ## Locked Decisions
 
 - Start with a personal/single-user workflow.

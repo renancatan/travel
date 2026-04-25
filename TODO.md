@@ -5,6 +5,7 @@
 - [x] Archive the old travel app under `legacy/travel-v0`.
 - [x] Remove the old GitHub Pages workflow from the active root.
 - [x] Reset the repo root for a clean v1 start.
+- [x] Re-read current Markdown handoff/business docs after the heavy proxy testing updates and confirm the standard-vs-proxy direction is current.
 
 ## Phase 1: Foundation
 
@@ -36,6 +37,9 @@
 - [ ] Add a separate heavy-video ingest path for realistic travel footage:
   - keep the current sync/browser-friendly path for lighter clips
   - route heavier inputs into async processing
+  - treat long/4K source videos as temporary processing inputs by default, not permanent stored assets
+  - store generated reels, selected frames, proxies, metadata, and map outputs as the default durable assets
+  - make permanent original-video archive storage an explicit paid or credit-consuming option
   - start testing with `5m` to `15m` 4K files before trying full dive sessions
   - prepare for realistic worst-case albums such as:
     - `3 x 1h` 4K diving videos
@@ -56,16 +60,68 @@
 - [ ] Define video-handling thresholds so the app can choose the right path automatically:
   - `light` path for short clips and small albums
   - `heavy` path for long clips, 4K, or large combined album duration
+  - decide default retention thresholds such as:
+    - keep originals for short clips under roughly `1m`
+    - keep `1m` to `10m` originals temporarily unless archived
+    - treat `10m+`, multi-GB, or heavy 4K originals as temporary by default
   - keep those thresholds centralized in config instead of scattering them across the app
 - [ ] For the heavy path, add server-side preprocessing before AI review:
   - `ffprobe` metadata
   - analysis proxy / mezzanine video
+  - lower-resolution proxy generation from 4K sources so analysis/rendering does not always hit originals
   - extracted keyframes or scene-contact sheets
   - timeline candidate windows for later AI ranking
+- [ ] Tune heavy-video preprocessing defaults from the Pamilacan 27m test:
+  - the current local proxy job re-encoded a `27m53s`, `1920 x 1080`, HEVC DJI source into a `505 MB` H.264 proxy and took roughly `10m`
+  - direct server keyframe extraction from the same original took about `6s` for `12` JPEG frames
+  - for 1080p/FHD long videos, prefer direct keyframe/contact-sheet extraction first and skip full proxy generation unless rendering/compatibility actually needs it
+  - reserve full proxy generation for 4K, very high bitrate, incompatible codecs, remote storage egress savings, or repeated downstream clip extraction
+  - surface the heavy processing action near AI review or make it automatic/progressive, not hidden low on the media card
+- [ ] Improve proxy/heavy reel quality based on `petar55` comparison:
+  - standard path produced more scenic/highlight-feeling reels
+  - proxy path surfaced underwater details the standard path missed, but often picked less compelling/repetitive windows
+  - first tuning pass now gives proxy analysis its own visual budget with video keyframes first, then a few high-ranked stills
+  - first tuning pass now scores server keyframes with a cheap complexity signal, selects diverse anchors, and caps proxy-heavy reels so still/story beats remain in the draft
+  - `petar56` validation confirmed the proxy read now understands underwater content better, but the rendered proxy reels are still not clearly better than standard because clip-window selection is still mostly deterministic instead of semantic
+  - second tuning pass now turns the proxy comparison output into `Proxy Hybrid` variants when a standard analysis exists: keep the standard reel structure and replace up to two middle video beats with ranked proxy-discovered detail windows
+  - `petar1` retest after the keyframe-first change is the strongest hybrid shape so far: standard remains the better taste/story baseline, while proxy hybrid can challenge it by injecting two underwater discovered-detail beats without rebuilding the whole reel from proxy output
+  - still open: replace cheap keyframe scoring with semantic/taste-aware scoring so proxy discovers strong detail beats without overvaluing busy but repetitive underwater texture
+  - likely next UX/algorithm direction: add semantic labels/scores for keyframes and maybe create a clearly labeled "Dive details" alternate
+- [ ] Define the product/value rule for heavy media:
+  - classify heavy using both duration and file size, not one threshold only: `>10m`, `>500 MB`, `4K`, high bitrate, or less-portable codecs should leave the standard short path
+  - keep FHD long videos keyframe/contact-sheet-first; only create a proxy when repeated renders, compatibility, 4K/high bitrate, or remote egress savings justify it
+  - monetize heavy work through extra candidate variants, detail-discovery packs, 4K/high-bitrate processing, exports, credits, and optional original archive retention rather than making full proxy generation the default paid feature
+  - add cleanup for orphaned render folders as a separate local-storage safety feature; deleting albums does not currently remove all old `storage/local/renders` folders
 - [ ] Move heavy media analysis off the request path:
   - background worker job
   - processing status in the UI
   - album becomes reviewable progressively instead of waiting for the full raw footage
+  - make jobs idempotent so retries do not duplicate expensive processing
+  - ensure long `ffmpeg` jobs are handled by workers/queues rather than load-balancer-held API requests
+- [x] Add first local heavy-video processing job slice:
+  - `POST /albums/{album_id}/media/{media_id}/processing-job`
+  - local FastAPI `BackgroundTasks` runner as a stand-in for a real queue
+  - persisted per-video job state on media items
+  - FHD long videos now use direct server keyframe extraction first instead of always generating a proxy
+  - generated 720/1280-ish analysis proxy with `ffmpeg` only when the source is 4K, high-bitrate, less portable, or likely to benefit downstream
+  - extracted server keyframes from the source/proxy
+  - generated first-pass timeline candidate windows
+  - UI start/retry/rebuild action, progress display, proxy link, and keyframe grid
+  - the proxy/heavy AI review can use server keyframes after the job completes
+  - records first-pass processing telemetry such as proxy time/size, keyframe time, output bytes, and temporary original GB-days
+  - still not production async infrastructure; SQS/worker and retention cleanup remain open
+- [x] Add a separate proxy/heavy AI comparison lane without replacing the standard album read:
+  - standard `Analyze album` still writes to `cached_suggestion`
+  - new `Analyze with proxy` writes to `proxy_cached_suggestion`
+  - proxy analysis first ensures heavy proxy/keyframe processing is ready, then runs a separate AI read that prioritizes server keyframes/timeline windows
+  - proxy reel variants are labeled with `Proxy` and stored/rendered separately
+  - proxy compare reels use separate endpoints so standard compare reels remain available for side-by-side testing
+  - heavy/proxy processing now invalidates only the proxy comparison cache, not the standard analysis cache
+  - proxy reel cards remain visible even if an older album has proxy analysis but no standard cached suggestion
+- [x] Add a bulk album cleanup control for local disk pressure:
+  - sidebar can select individual albums or select all
+  - delete selected albums uses the existing album delete API and confirmation dialog
+  - intended for clearing `storage/local` safely after heavy-video testing
 - [x] Export a render-ready reel draft spec with clip windows and `ffmpeg` command planning.
 - [x] Add a real local reel render action plus preview/download flow.
 - [x] Validate real local reel rendering with installed `ffmpeg`.
@@ -165,6 +221,8 @@
   - keep variant selection lightweight before showing deeper editing
   - the compare-first flow works now, but the overall target-to-variant-to-editor progression can still be simplified
   - revisit whether the initial compare render should stay a separate action or become the default path more explicitly
+  - make default compare-variant count tier/credit aware before production, especially for heavy videos
+  - consider one included heavy-video reel first, with extra variants consuming credits
 - [x] Show advanced reel editing only after the user selects which suggested reel variant(s) they want to keep.
 - [ ] Normalize exports for social-ready output sizes and frame rates.
 - [ ] Keep all AI decisions explainable in the UI.
@@ -303,6 +361,10 @@
   - timeline segmentation
   - thumbnail / contact-sheet generation
   - later transcription and richer multimodal analysis
+- [ ] Add retention cleanup jobs for temporary original videos:
+  - delete long-source originals after a configurable retention window
+  - preserve generated outputs and selected frames
+  - skip cleanup when paid/archive retention is enabled
 - [ ] Add cheap first-stage deployment docs before adding heavier infra.
 
 ## Phase 7: Portability
@@ -313,7 +375,44 @@
 - [ ] Keep environment variable names generic where possible.
 - [ ] Document a future migration path to Cloudflare or other lower-cost hosting.
 
-## Phase 8: Validation
+## Phase 8: Business Model And Cost Controls
+
+- [ ] Keep product pricing simple and user-facing:
+  - likely base plan around `$9.99/month`
+  - include a monthly credit allowance
+  - use credits for heavy processing, extra variants, original archive storage, and premium AI
+  - avoid exposing raw CPU/GPU/LLM/cluster buckets in normal UX
+- [ ] Define usage-credit units before production:
+  - long video processing minutes
+  - 4K/heavy video processing minutes
+  - extra compare reel variants
+  - final render actions
+  - original video archive GB-months
+  - premium AI analysis calls
+- [ ] Add entitlement checks for production-facing expensive actions:
+  - heavy-video processing
+  - compare variant count
+  - long retention of originals
+  - high-resolution export options
+- [ ] Add cost telemetry before final pricing:
+  - uploaded bytes by media kind
+  - source video duration/resolution/codec
+  - retained original GB-days
+  - proxy/render/frame extraction worker seconds
+  - compare and final render counts
+  - AI calls by feature and provider
+  - input/output tokens when provider usage data is available
+  - visual inputs sent to AI
+  - queue wait time, retry count, and failure reason
+  - egress/download bytes
+- [ ] Add an internal per-album cost report:
+  - estimated storage cost
+  - estimated worker/render cost
+  - estimated LLM cost
+  - generated-output storage footprint
+  - credit burn estimate for the user-facing plan
+
+## Phase 9: Validation
 
 - [ ] Test the app with 3 real trips.
 - [ ] Track how long manual curation takes before and after the app.

@@ -12,6 +12,7 @@ MEDIA_PROCESSING_RULES: dict[str, Any] = {
     "very_large_file_bytes": 2 * 1024 * 1024 * 1024,
     "uhd_min_width": 3840,
     "uhd_min_height": 2160,
+    "proxy_high_bitrate_bits_per_second": 40_000_000,
 }
 
 
@@ -48,7 +49,7 @@ def classify_media_processing(media_item: dict[str, Any]) -> dict[str, Any]:
             "processing_profile": "heavy_async",
             "processing_profile_label": "Heavy video",
             "processing_recommendation": (
-                "Keep the original, create a proxy, and analyze timeline candidates in a background worker."
+                "Extract server keyframes first; create a lighter proxy only when the source size, codec, or downstream work justifies it."
             ),
             "analysis_strategy": "async_proxy_required",
             "is_heavy_video": True,
@@ -90,6 +91,7 @@ def get_media_processing_runtime_rules() -> dict[str, Any]:
         "very_large_file_bytes": int(MEDIA_PROCESSING_RULES["very_large_file_bytes"]),
         "uhd_min_width": int(MEDIA_PROCESSING_RULES["uhd_min_width"]),
         "uhd_min_height": int(MEDIA_PROCESSING_RULES["uhd_min_height"]),
+        "proxy_high_bitrate_bits_per_second": int(MEDIA_PROCESSING_RULES["proxy_high_bitrate_bits_per_second"]),
     }
 
 

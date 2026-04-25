@@ -5,12 +5,14 @@ import hashlib
 import logging
 import re
 from copy import deepcopy
+from pathlib import Path
 
-from fastapi import APIRouter, Body, Header, HTTPException, Request, Response, status
+from fastapi import APIRouter, BackgroundTasks, Body, Header, HTTPException, Request, Response, status
 from fastapi.responses import FileResponse
 
 from services.api.app.core.album_suggestions import AlbumSuggestionService
 from services.api.app.core.file_repository import FileRepository
+from services.api.app.core.heavy_media_processing import HeavyMediaProcessingError, HeavyMediaProcessingService
 from services.api.app.core.map_entries import MapEntrySuggestionService, build_auto_map_entry, merge_map_entry
 from services.api.app.core.media_metadata import (
     build_media_metadata_from_file,
@@ -30,6 +32,7 @@ from services.api.app.models.albums import (
     UpdateMapEntryRequest,
     RenderReelResponse,
     SaveReelDraftVersionRequest,
+    StartMediaProcessingJobRequest,
     UpdateReelDraftRequest,
     UpdateAlbumRequest,
     UploadMediaResponse,
@@ -42,7 +45,11 @@ suggestion_service = AlbumSuggestionService()
 map_entry_service = MapEntrySuggestionService()
 reel_renderer = ReelRenderer()
 reel_frame_gallery_service = ReelFrameGalleryService()
+heavy_media_processing_service = HeavyMediaProcessingService()
 logger = logging.getLogger(__name__)
+
+STANDARD_SUGGESTION_KEY = "cached_suggestion"
+PROXY_SUGGESTION_KEY = "proxy_cached_suggestion"
 
 
 @router.get("", response_model=list[AlbumResponse])
@@ -188,6 +195,81 @@ def get_media_thumbnail(album_id: str, media_id: str) -> FileResponse:
     )
 
 
+@router.post("/{album_id}/media/{media_id}/processing-job", response_model=MediaItemResponse)
+def start_media_processing_job(
+    album_id: str,
+    media_id: str,
+    background_tasks: BackgroundTasks,
+    request: StartMediaProcessingJobRequest | None = Body(default=None),
+) -> dict:
+    if repository.get_album(album_id) is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    try:
+        media_item = heavy_media_processing_service.start_job(
+            repository,
+            album_id=album_id,
+            media_id=media_id,
+            force=bool(request.force if request else False),
+        )
+    except HeavyMediaProcessingError as exc:
+        message = str(exc)
+        status_code = status.HTTP_409_CONFLICT if "ffmpeg" in message.lower() else status.HTTP_400_BAD_REQUEST
+        if "not found" in message.lower():
+            status_code = status.HTTP_404_NOT_FOUND
+        raise HTTPException(status_code=status_code, detail=message) from exc
+
+    job_id = str(media_item.get("heavy_processing_job_id") or "").strip()
+    job_status = str(media_item.get("heavy_processing_job_status") or "").strip()
+    if job_id and job_status == "pending":
+        background_tasks.add_task(
+            heavy_media_processing_service.run_job,
+            repository,
+            album_id=album_id,
+            media_id=media_id,
+            job_id=job_id,
+        )
+    return media_item
+
+
+@router.get("/{album_id}/media/{media_id}/processing-proxy")
+def get_media_processing_proxy(album_id: str, media_id: str) -> FileResponse:
+    media_item = repository.get_media_item(album_id, media_id)
+    if media_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found.")
+
+    try:
+        proxy_path = heavy_media_processing_service.get_proxy_path(media_item)
+    except HeavyMediaProcessingError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    response = FileResponse(
+        path=proxy_path,
+        media_type=str(media_item.get("heavy_processing_proxy_content_type") or "video/mp4"),
+        filename=f"{Path(str(media_item.get('stored_filename') or media_id)).stem}-analysis-proxy.mp4",
+    )
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    return response
+
+
+@router.get("/{album_id}/media/{media_id}/processing-keyframes/{frame_number}")
+def get_media_processing_keyframe(album_id: str, media_id: str, frame_number: int) -> FileResponse:
+    media_item = repository.get_media_item(album_id, media_id)
+    if media_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media item not found.")
+
+    try:
+        keyframe_path = heavy_media_processing_service.get_keyframe_path(media_item, frame_number)
+    except HeavyMediaProcessingError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=keyframe_path,
+        media_type="image/jpeg",
+        filename=f"{Path(str(media_item.get('stored_filename') or media_id)).stem}-keyframe-{frame_number:02d}.jpg",
+    )
+
+
 @router.get("/{album_id}/rendered-reel/content")
 def get_rendered_reel_content(album_id: str) -> FileResponse:
     album = repository.get_album(album_id)
@@ -225,11 +307,28 @@ def get_rendered_reel_content(album_id: str) -> FileResponse:
 
 @router.get("/{album_id}/rendered-variants/{variant_id}/content")
 def get_rendered_variant_content(album_id: str, variant_id: str) -> FileResponse:
+    return _get_rendered_variant_content(
+        album_id,
+        variant_id,
+        suggestion_key=STANDARD_SUGGESTION_KEY,
+    )
+
+
+@router.get("/{album_id}/proxy-rendered-variants/{variant_id}/content")
+def get_proxy_rendered_variant_content(album_id: str, variant_id: str) -> FileResponse:
+    return _get_rendered_variant_content(
+        album_id,
+        variant_id,
+        suggestion_key=PROXY_SUGGESTION_KEY,
+    )
+
+
+def _get_rendered_variant_content(album_id: str, variant_id: str, *, suggestion_key: str) -> FileResponse:
     album = repository.get_album(album_id)
     if album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
 
-    cached_suggestion = album.get("cached_suggestion")
+    cached_suggestion = album.get(suggestion_key)
     if not isinstance(cached_suggestion, dict):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered variant not found.")
 
@@ -265,7 +364,7 @@ def get_rendered_variant_content(album_id: str, variant_id: str) -> FileResponse
             for item in rendered_variant_renders
             if not (isinstance(item, dict) and str(item.get("variant_id") or "").strip() == variant_id)
         ]
-        repository.save_rendered_variant_renders(album_id, updated_renders)
+        repository.save_rendered_variant_renders(album_id, updated_renders, suggestion_key=suggestion_key)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Rendered variant file not found.")
 
     response = FileResponse(
@@ -408,6 +507,37 @@ def generate_album_suggestions(
     return suggestion
 
 
+@router.post("/{album_id}/proxy-suggestions", response_model=AlbumSuggestionResponse)
+def generate_album_proxy_suggestions(
+    album_id: str,
+    request: GenerateAlbumSuggestionsRequest | None = Body(default=None),
+) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    if not album.get("media_items"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Album has no media items yet.")
+
+    if not _album_has_completed_heavy_processing_context(album):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Run heavy video processing first so the proxy/keyframe comparison read has server keyframes.",
+        )
+
+    suggestion = suggestion_service.generate(
+        album,
+        reel_variant_request=(
+            request.reel_variant_request.model_dump(exclude_none=True)
+            if request and request.reel_variant_request
+            else None
+        ),
+        analysis_profile="proxy",
+    )
+    repository.save_cached_suggestion(album_id, suggestion, suggestion_key=PROXY_SUGGESTION_KEY)
+    return suggestion
+
+
 @router.post("/{album_id}/reel-draft", response_model=AlbumResponse)
 def update_album_reel_draft(album_id: str, request: UpdateReelDraftRequest) -> dict:
     album = repository.refresh_album_media_metadata(album_id)
@@ -527,14 +657,36 @@ def render_album_reel(album_id: str, request: UpdateReelDraftRequest | None = Bo
 
 @router.post("/{album_id}/rendered-variants", response_model=AlbumResponse)
 def render_album_reel_variants(album_id: str) -> dict:
+    return _render_album_reel_variants(
+        album_id,
+        suggestion_key=STANDARD_SUGGESTION_KEY,
+        missing_variants_detail="No AI reel variants are available to render.",
+    )
+
+
+@router.post("/{album_id}/proxy-rendered-variants", response_model=AlbumResponse)
+def render_album_proxy_reel_variants(album_id: str) -> dict:
+    return _render_album_reel_variants(
+        album_id,
+        suggestion_key=PROXY_SUGGESTION_KEY,
+        missing_variants_detail="No proxy reel variants are available to render.",
+    )
+
+
+def _render_album_reel_variants(
+    album_id: str,
+    *,
+    suggestion_key: str,
+    missing_variants_detail: str,
+) -> dict:
     album = repository.refresh_album_media_metadata(album_id)
     if album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
 
-    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album, suggestion_key=suggestion_key)
     reel_draft_variants = cached_suggestion.get("reel_draft_variants")
     if not isinstance(reel_draft_variants, list) or not reel_draft_variants:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No AI reel variants are available to render.")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=missing_variants_detail)
 
     rendered_variants: list[dict] = []
     for variant in reel_draft_variants:
@@ -570,7 +722,11 @@ def render_album_reel_variants(album_id: str) -> dict:
             }
         )
 
-    updated_album = repository.save_rendered_variant_renders(album_id, rendered_variants)
+    updated_album = repository.save_rendered_variant_renders(
+        album_id,
+        rendered_variants,
+        suggestion_key=suggestion_key,
+    )
     if updated_album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
     return updated_album
@@ -697,18 +853,28 @@ def _decode_image_data_url(data_url: str) -> tuple[str, bytes]:
     return content_type, payload
 
 
-def _get_renderable_cached_suggestion(album_id: str, album: dict) -> dict:
-    cached_suggestion = album.get("cached_suggestion")
+def _get_renderable_cached_suggestion(
+    album_id: str,
+    album: dict,
+    *,
+    suggestion_key: str = STANDARD_SUGGESTION_KEY,
+) -> dict:
+    cached_suggestion = album.get(suggestion_key)
     if not isinstance(cached_suggestion, dict):
-        logger.warning("Render reel blocked album_id=%s reason=no_cached_suggestion", album_id)
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Run AI review before rendering a reel.")
+        logger.warning("Render reel blocked album_id=%s suggestion_key=%s reason=no_cached_suggestion", album_id, suggestion_key)
+        detail = (
+            "Run proxy AI review before rendering proxy reels."
+            if suggestion_key == PROXY_SUGGESTION_KEY
+            else "Run AI review before rendering a reel."
+        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
     reel_draft = cached_suggestion.get("reel_draft")
     render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
     if not isinstance(render_spec, dict):
-        logger.info("Upgrading cached suggestion before render album_id=%s", album_id)
+        logger.info("Upgrading cached suggestion before render album_id=%s suggestion_key=%s", album_id, suggestion_key)
         cached_suggestion = suggestion_service.upgrade_cached_suggestion(album, cached_suggestion)
-        repository.save_cached_suggestion(album_id, cached_suggestion)
+        repository.save_cached_suggestion(album_id, cached_suggestion, suggestion_key=suggestion_key)
 
     reel_draft = cached_suggestion.get("reel_draft")
     render_spec = reel_draft.get("render_spec") if isinstance(reel_draft, dict) else None
@@ -717,6 +883,17 @@ def _get_renderable_cached_suggestion(album_id: str, album: dict) -> dict:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="This album does not have a renderable reel draft yet.")
 
     return cached_suggestion
+
+
+def _album_has_completed_heavy_processing_context(album: dict) -> bool:
+    for media_item in album.get("media_items") or []:
+        if not isinstance(media_item, dict):
+            continue
+        if str(media_item.get("media_kind") or "") != "video":
+            continue
+        if int(media_item.get("heavy_processing_keyframe_count") or 0) > 0:
+            return True
+    return False
 
 
 def _build_reel_draft_edit_payload(reel_draft: dict) -> dict:
