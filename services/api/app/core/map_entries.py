@@ -280,13 +280,24 @@ class MapEntrySuggestionService:
         selected_reel_variant_id: str | None,
     ) -> dict[str, Any]:
         valid_media_ids = {str(item.get('id') or '').strip() for item in album.get("media_items") or []}
-        candidate_media_ids = [
-            media_id
-            for media_id in (
-                str(media_id).strip() for media_id in data.get("selected_media_ids") or selected_media_ids or []
-            )
-            if media_id and media_id in valid_media_ids
-        ]
+        candidate_media_ids: list[str] = []
+        for media_id in selected_media_ids or []:
+            normalized_media_id = str(media_id).strip()
+            if (
+                normalized_media_id
+                and normalized_media_id in valid_media_ids
+                and normalized_media_id not in candidate_media_ids
+            ):
+                candidate_media_ids.append(normalized_media_id)
+
+        for media_id in data.get("selected_media_ids") or []:
+            normalized_media_id = str(media_id).strip()
+            if (
+                normalized_media_id
+                and normalized_media_id in valid_media_ids
+                and normalized_media_id not in candidate_media_ids
+            ):
+                candidate_media_ids.append(normalized_media_id)
 
         group_key = normalize_group_key(data.get("group_key") or fallback_entry.get("group_key"))
         normalized_place_fields = normalize_map_place_fields(

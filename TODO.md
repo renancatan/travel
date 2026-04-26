@@ -152,6 +152,10 @@
   - standard, proxy, AI Best Pick, and Best Mix choices now share one compare-focus state
   - choosing a reel hides unrelated compare reels until `Show all reels` is clicked
   - `Show all reels` restores the compare grid without clearing the chosen reel editor/map source
+- [x] Tighten map handoff for all chosen reel sources:
+  - `/map` resolves linked reel previews for standard variants, proxy variants, AI Best Pick prefixed IDs, and rendered Best Mix/final reels
+  - map media fallback can derive source media from the linked draft/variant so older map entries still show chosen reel assets
+  - map AI now preserves requested chosen-reel media IDs first instead of letting the model shrink the saved media set
 - [x] Export a render-ready reel draft spec with clip windows and `ffmpeg` command planning.
 - [x] Add a real local reel render action plus preview/download flow.
 - [x] Validate real local reel rendering with installed `ffmpeg`.

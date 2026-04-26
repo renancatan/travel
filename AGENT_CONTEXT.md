@@ -327,6 +327,11 @@ Implemented in `apps/web`:
   - removed the old on-screen `Reel candidates` / `Reel plan` path so the product no longer visually encourages the legacy one-reel draft flow; final rendering is tied to a chosen reel workspace
   - focused/proxy winner cards and rendered Best Mix now have explicit choose actions; selecting standard/proxy/best-pick/best-mix reels loads the draft into the chosen-reel editor, switches map mode to `chosen_reel`, and clears stale frame-gallery state
   - compare-grid focus is now generic instead of AI-Best-Pick-only: selecting any standard/proxy/winner/mix reel hides unrelated reel previews until `Show all reels` is clicked, while preserving the chosen editor/map source
+- 2026-04-26 map handoff cleanup:
+  - `/map` now normalizes selected reel variant IDs from all reel paths: raw standard IDs, `standard:<id>` AI-pick IDs, `proxy:<id>` hybrid IDs, and `best-of-mix`
+  - linked reel preview resolution prefers a final/rendered reel when its draft name matches the saved map entry, then falls back to standard or proxy compare renders
+  - map display media can derive source assets from the linked draft/variant when an older map entry saved too narrow a `selected_media_ids` list
+  - map AI normalization now keeps requested chosen-reel media IDs first, then appends any AI-returned IDs, so the model cannot silently drop the chosen reel source context
 
 ### Confirmed working
 

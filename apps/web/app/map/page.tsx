@@ -44,6 +44,24 @@ type RenderedVariant = {
   video_strategy: string;
 };
 
+type ReelDraft = {
+  draft_name: string;
+  steps?: Array<{
+    media_id?: string | null;
+  }> | null;
+};
+
+type ReelDraftVariant = {
+  variant_id: string;
+  reel_draft?: ReelDraft | null;
+};
+
+type CachedSuggestion = {
+  reel_draft?: ReelDraft | null;
+  reel_draft_variants?: ReelDraftVariant[] | null;
+  rendered_variant_renders?: RenderedVariant[] | null;
+};
+
 type MapEntry = {
   album_id: string;
   album_name: string;
@@ -78,9 +96,8 @@ type MapEntry = {
 type Album = {
   id: string;
   name: string;
-  cached_suggestion?: {
-    rendered_variant_renders?: RenderedVariant[] | null;
-  } | null;
+  cached_suggestion?: CachedSuggestion | null;
+  proxy_cached_suggestion?: CachedSuggestion | null;
   map_entry?: MapEntry | null;
   rendered_reel?: RenderedReel | null;
   media_items: MediaItem[];
@@ -138,6 +155,11 @@ const MAP_ICON_EMOJI: Record<string, string> = {
   general: "📍",
 };
 
+type ReelVariantSelection = {
+  source: "standard" | "proxy" | "mix";
+  variantId: string | null;
+};
+
 let leafletAssetsPromise: Promise<void> | null = null;
 
 function getMediaUrl(albumId: string, mediaId: string) {
@@ -156,6 +178,39 @@ function getRenderedVariantUrl(albumId: string, variantId: string) {
   return `${API_BASE_URL}/albums/${albumId}/rendered-variants/${variantId}/content`;
 }
 
+function getProxyRenderedVariantUrl(albumId: string, variantId: string) {
+  return `${API_BASE_URL}/albums/${albumId}/proxy-rendered-variants/${variantId}/content`;
+}
+
+function parseSelectedReelVariantId(value: string | null | undefined): ReelVariantSelection | null {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "best-of-mix") {
+    return {
+      source: "mix",
+      variantId: null,
+    };
+  }
+  if (normalized.startsWith("proxy:")) {
+    return {
+      source: "proxy",
+      variantId: normalized.slice("proxy:".length),
+    };
+  }
+  if (normalized.startsWith("standard:")) {
+    return {
+      source: "standard",
+      variantId: normalized.slice("standard:".length),
+    };
+  }
+  return {
+    source: "standard",
+    variantId: normalized,
+  };
+}
+
 function getOpenStreetMapUrl(entry: MapEntry | null) {
   if (!entry) {
     return null;
@@ -169,13 +224,173 @@ function buildLocationLine(entry: MapEntry) {
     .join(" / ");
 }
 
+function extractMediaIdsFromReelDraft(reelDraft: ReelDraft | null | undefined): string[] {
+  const seenMediaIds = new Set<string>();
+  const mediaIds: string[] = [];
+
+  for (const step of reelDraft?.steps ?? []) {
+    const mediaId = String(step.media_id ?? "").trim();
+    if (!mediaId || seenMediaIds.has(mediaId)) {
+      continue;
+    }
+    seenMediaIds.add(mediaId);
+    mediaIds.push(mediaId);
+  }
+
+  return mediaIds;
+}
+
+function findReelDraftForMapEntry(album: Album, entry: MapEntry): ReelDraft | null {
+  const selection = parseSelectedReelVariantId(entry.selected_reel_variant_id);
+  const standardVariants = album.cached_suggestion?.reel_draft_variants ?? [];
+  const proxyVariants = album.proxy_cached_suggestion?.reel_draft_variants ?? [];
+  const draftName = entry.selected_reel_draft_name;
+
+  if (draftName && album.cached_suggestion?.reel_draft?.draft_name === draftName) {
+    return album.cached_suggestion.reel_draft;
+  }
+  if (draftName && album.proxy_cached_suggestion?.reel_draft?.draft_name === draftName) {
+    return album.proxy_cached_suggestion.reel_draft;
+  }
+
+  if (selection?.source !== "mix" && selection?.variantId) {
+    const variants = selection.source === "proxy" ? proxyVariants : standardVariants;
+    const selectedVariant = variants.find((variant) => variant.variant_id === selection.variantId);
+    if (selectedVariant?.reel_draft) {
+      return selectedVariant.reel_draft;
+    }
+  }
+
+  const allVariants = [...standardVariants, ...proxyVariants];
+  const matchingVariant = allVariants.find((variant) => variant.reel_draft?.draft_name === draftName);
+  return matchingVariant?.reel_draft ?? null;
+}
+
+function buildRenderedReelDisplayMedia(
+  album: Album,
+  entry: MapEntry,
+  posterSource: MediaItem | null,
+): MapDisplayMedia | null {
+  if (!album.rendered_reel || !entry.selected_reel_draft_name) {
+    return null;
+  }
+  if (album.rendered_reel.draft_name !== entry.selected_reel_draft_name) {
+    return null;
+  }
+
+  return {
+    id: `rendered-reel:${album.id}:${album.rendered_reel.draft_name}`,
+    album_id: album.id,
+    label:
+      entry.selected_reel_variant_id === "best-of-mix"
+        ? "Best Mix (chosen reel)"
+        : `${album.rendered_reel.draft_name} (final reel)`,
+    content_type: album.rendered_reel.content_type,
+    media_kind: "video",
+    kind: "rendered_reel",
+    src: getRenderedReelUrl(album.id),
+    poster: posterSource ? getThumbnailUrl(posterSource.album_id, posterSource.id) : null,
+    renderedReel: album.rendered_reel,
+  };
+}
+
+function findRenderedVariantForMapEntry(album: Album, entry: MapEntry): { variant: RenderedVariant; source: "standard" | "proxy" } | null {
+  const selection = parseSelectedReelVariantId(entry.selected_reel_variant_id);
+  const standardVariants = album.cached_suggestion?.rendered_variant_renders ?? [];
+  const proxyVariants = album.proxy_cached_suggestion?.rendered_variant_renders ?? [];
+
+  if (selection?.source === "mix") {
+    return null;
+  }
+
+  if (selection?.variantId) {
+    const preferredVariants = selection.source === "proxy" ? proxyVariants : standardVariants;
+    const preferredVariant = preferredVariants.find((renderedVariant) => renderedVariant.variant_id === selection.variantId);
+    if (preferredVariant) {
+      return {
+        variant: preferredVariant,
+        source: selection.source,
+      };
+    }
+
+    const fallbackVariant = [...standardVariants, ...proxyVariants].find(
+      (renderedVariant) => renderedVariant.variant_id === selection.variantId,
+    );
+    if (fallbackVariant) {
+      return {
+        variant: fallbackVariant,
+        source: proxyVariants.some((renderedVariant) => renderedVariant.variant_id === fallbackVariant.variant_id)
+          ? "proxy"
+          : "standard",
+      };
+    }
+  }
+
+  const draftFamilyPrefix = entry.selected_reel_draft_name?.replace(/-reel-draft$/, "") ?? null;
+  if (!draftFamilyPrefix) {
+    return null;
+  }
+
+  const fallbackVariant = [...standardVariants, ...proxyVariants].find((renderedVariant) =>
+    renderedVariant.draft_name.startsWith(`${draftFamilyPrefix}-`),
+  );
+  if (!fallbackVariant) {
+    return null;
+  }
+
+  return {
+    variant: fallbackVariant,
+    source: proxyVariants.some((renderedVariant) => renderedVariant.variant_id === fallbackVariant.variant_id)
+      ? "proxy"
+      : "standard",
+  };
+}
+
+function buildRenderedVariantDisplayMedia(
+  album: Album,
+  renderedVariant: RenderedVariant,
+  source: "standard" | "proxy",
+  posterSource: MediaItem | null,
+): MapDisplayMedia {
+  return {
+    id: `rendered-variant:${source}:${album.id}:${renderedVariant.variant_id}`,
+    album_id: album.id,
+    label: `${renderedVariant.label} (${source === "proxy" ? "proxy chosen reel" : "chosen reel"})`,
+    content_type: renderedVariant.content_type,
+    media_kind: "video",
+    kind: "rendered_reel",
+    src:
+      source === "proxy"
+        ? getProxyRenderedVariantUrl(album.id, renderedVariant.variant_id)
+        : getRenderedVariantUrl(album.id, renderedVariant.variant_id),
+    poster: posterSource ? getThumbnailUrl(posterSource.album_id, posterSource.id) : null,
+    renderedReel: {
+      draft_name: renderedVariant.draft_name,
+      relative_path: "",
+      content_type: renderedVariant.content_type,
+      file_size_bytes: renderedVariant.file_size_bytes,
+      rendered_at: renderedVariant.rendered_at,
+      output_width: renderedVariant.output_width,
+      output_height: renderedVariant.output_height,
+      fps: renderedVariant.fps,
+      estimated_total_duration_seconds: renderedVariant.estimated_total_duration_seconds,
+      video_strategy: renderedVariant.video_strategy,
+    },
+  };
+}
+
 function buildSelectedMedia(album: Album | null, entry: MapEntry | null) {
   if (!album || !entry) {
     return [];
   }
+  const reelDraftMediaIds = extractMediaIdsFromReelDraft(findReelDraftForMapEntry(album, entry));
+  const selectedMediaIds = [...entry.selected_media_ids, ...reelDraftMediaIds]
+    .map((mediaId) => mediaId.trim())
+    .filter((mediaId, index, mediaIds) => Boolean(mediaId) && mediaIds.indexOf(mediaId) === index)
+    .slice(0, MAX_MAP_MEDIA);
   const mediaById = new Map(album.media_items.map((mediaItem) => [mediaItem.id, mediaItem]));
-  const originalOrder = new Map(entry.selected_media_ids.map((mediaId, index) => [mediaId, index]));
-  const selectedSourceMedia = entry.selected_media_ids
+  const originalOrder = new Map(selectedMediaIds.map((mediaId, index) => [mediaId, index]));
+  const selectedSourceMedia = selectedMediaIds
     .map((mediaId) => mediaById.get(mediaId) ?? null)
     .filter((mediaItem): mediaItem is MediaItem => Boolean(mediaItem))
     .sort((left, right) => {
@@ -191,58 +406,11 @@ function buildSelectedMedia(album: Album | null, entry: MapEntry | null) {
     selectedSourceMedia.find((mediaItem) => mediaItem.media_kind === "video") ??
     selectedSourceMedia[0] ??
     null;
-  const draftFamilyPrefix = entry.selected_reel_draft_name?.replace(/-reel-draft$/, "") ?? null;
-  const matchingRenderedVariant =
-    album.cached_suggestion?.rendered_variant_renders?.find((renderedVariant) => {
-      if (entry.selected_reel_variant_id) {
-        return renderedVariant.variant_id === entry.selected_reel_variant_id;
-      }
-      if (!draftFamilyPrefix) {
-        return false;
-      }
-      return renderedVariant.draft_name.startsWith(`${draftFamilyPrefix}-`);
-    }) ?? null;
-  const renderedReel =
-    album.rendered_reel &&
-    entry.selected_reel_draft_name &&
-    !entry.selected_reel_variant_id &&
-    album.rendered_reel.draft_name === entry.selected_reel_draft_name
-      ? {
-          id: `rendered-reel:${album.id}:${album.rendered_reel.draft_name}`,
-          album_id: album.id,
-          label: `${album.rendered_reel.draft_name} (final reel)`,
-          content_type: album.rendered_reel.content_type,
-          media_kind: "video" as const,
-          kind: "rendered_reel" as const,
-          src: getRenderedReelUrl(album.id),
-          poster: posterSource ? getThumbnailUrl(posterSource.album_id, posterSource.id) : null,
-          renderedReel: album.rendered_reel,
-        }
-      : null;
+  const renderedReel = buildRenderedReelDisplayMedia(album, entry, posterSource);
+  const matchingRenderedVariant = findRenderedVariantForMapEntry(album, entry);
   const renderedVariant =
     !renderedReel && matchingRenderedVariant
-      ? {
-          id: `rendered-variant:${album.id}:${matchingRenderedVariant.variant_id}`,
-          album_id: album.id,
-          label: `${matchingRenderedVariant.label} (chosen reel)`,
-          content_type: matchingRenderedVariant.content_type,
-          media_kind: "video" as const,
-          kind: "rendered_reel" as const,
-          src: getRenderedVariantUrl(album.id, matchingRenderedVariant.variant_id),
-          poster: posterSource ? getThumbnailUrl(posterSource.album_id, posterSource.id) : null,
-          renderedReel: {
-            draft_name: matchingRenderedVariant.draft_name,
-            relative_path: "",
-            content_type: matchingRenderedVariant.content_type,
-            file_size_bytes: matchingRenderedVariant.file_size_bytes,
-            rendered_at: matchingRenderedVariant.rendered_at,
-            output_width: matchingRenderedVariant.output_width,
-            output_height: matchingRenderedVariant.output_height,
-            fps: matchingRenderedVariant.fps,
-            estimated_total_duration_seconds: matchingRenderedVariant.estimated_total_duration_seconds,
-            video_strategy: matchingRenderedVariant.video_strategy,
-          },
-        }
+      ? buildRenderedVariantDisplayMedia(album, matchingRenderedVariant.variant, matchingRenderedVariant.source, posterSource)
       : null;
 
   const sourceMedia = selectedSourceMedia
