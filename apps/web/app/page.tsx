@@ -343,6 +343,11 @@ type BestReelPick = {
   };
 };
 
+type ReelFocusTarget = {
+  source: "standard" | "proxy" | "mix" | string;
+  variant_id: string;
+};
+
 type BestOfReelRemixResponse = {
   album: Album;
   reel_draft: ReelDraft;
@@ -1473,7 +1478,8 @@ export default function Page() {
   const [isRenderingProxyVariantSet, setIsRenderingProxyVariantSet] = useState(false);
   const [isGeneratingBestPick, setIsGeneratingBestPick] = useState(false);
   const [isGeneratingBestOfRemix, setIsGeneratingBestOfRemix] = useState(false);
-  const [isBestPickFocusMode, setIsBestPickFocusMode] = useState(false);
+  const [isCompareFocusMode, setIsCompareFocusMode] = useState(false);
+  const [isFullReviewVisible, setIsFullReviewVisible] = useState(false);
   const [isReelFrameGalleryOpen, setIsReelFrameGalleryOpen] = useState(false);
   const [isLoadingReelFrameGallery, setIsLoadingReelFrameGallery] = useState(false);
   const [reelFrameGallery, setReelFrameGallery] = useState<ReelFrameGallery | null>(null);
@@ -1515,19 +1521,63 @@ export default function Page() {
   const renderedVariantRenders = activeSuggestions?.rendered_variant_renders ?? [];
   const renderedProxyVariantRenders = activeProxySuggestions?.rendered_variant_renders ?? [];
   const hasRenderedCompareReels = renderedVariantRenders.length > 0 || renderedProxyVariantRenders.length > 0;
-  const focusedBestPickWinner = isBestPickFocusMode ? bestReelPick?.winner ?? null : null;
-  const displayedSuggestedReelVariants = focusedBestPickWinner
-    ? focusedBestPickWinner.source === "standard"
-      ? suggestedReelVariants.filter((variant) => variant.variant_id === focusedBestPickWinner.variant_id)
+  const proxyEditorVariantId =
+    selectedEditorVariantId?.startsWith("proxy:") ? selectedEditorVariantId.slice("proxy:".length) : null;
+  const selectedStandardFocusVariantId =
+    selectedEditorVariantId &&
+    !selectedEditorVariantId.startsWith("proxy:") &&
+    !selectedEditorVariantId.startsWith("__")
+      ? selectedEditorVariantId
+      : null;
+  const selectedBestPickFocusTarget: ReelFocusTarget | null =
+    selectedEditorVariantId === "__best_pick__" && bestReelPick?.winner
+      ? {
+          source: bestReelPick.winner.source,
+          variant_id: bestReelPick.winner.variant_id,
+        }
+      : null;
+  const selectedReelFocusTarget: ReelFocusTarget | null =
+    selectedEditorVariantId === "__best_of_remix__"
+      ? {
+          source: "mix",
+          variant_id: "best-of-mix",
+        }
+      : selectedStandardFocusVariantId
+        ? {
+            source: "standard",
+            variant_id: selectedStandardFocusVariantId,
+          }
+        : proxyEditorVariantId
+          ? {
+              source: "proxy",
+              variant_id: proxyEditorVariantId,
+            }
+          : selectedBestPickFocusTarget;
+  const fallbackBestPickFocusTarget: ReelFocusTarget | null = bestReelPick?.winner
+    ? {
+        source: bestReelPick.winner.source,
+        variant_id: bestReelPick.winner.variant_id,
+      }
+    : null;
+  const focusedReelTarget = isCompareFocusMode ? selectedReelFocusTarget ?? fallbackBestPickFocusTarget : null;
+  const canToggleCompareFocus = Boolean(selectedReelFocusTarget || fallbackBestPickFocusTarget);
+  const focusToggleLabel = isCompareFocusMode
+    ? "Show all reels"
+    : selectedReelFocusTarget
+      ? "Focus chosen reel"
+      : "Focus winner";
+  const displayedSuggestedReelVariants = focusedReelTarget
+    ? focusedReelTarget.source === "standard"
+      ? suggestedReelVariants.filter((variant) => variant.variant_id === focusedReelTarget.variant_id)
       : []
     : suggestedReelVariants;
-  const displayedProxySuggestedReelVariants = focusedBestPickWinner
-    ? focusedBestPickWinner.source === "proxy"
-      ? proxySuggestedReelVariants.filter((variant) => variant.variant_id === focusedBestPickWinner.variant_id)
+  const displayedProxySuggestedReelVariants = focusedReelTarget
+    ? focusedReelTarget.source === "proxy"
+      ? proxySuggestedReelVariants.filter((variant) => variant.variant_id === focusedReelTarget.variant_id)
       : []
     : proxySuggestedReelVariants;
-  const showStandardVariantPanel = !focusedBestPickWinner || displayedSuggestedReelVariants.length > 0;
-  const showProxyVariantPanel = Boolean(activeProxySuggestions && (!focusedBestPickWinner || displayedProxySuggestedReelVariants.length > 0));
+  const showStandardVariantPanel = !focusedReelTarget || displayedSuggestedReelVariants.length > 0;
+  const showProxyVariantPanel = Boolean(activeProxySuggestions && (!focusedReelTarget || displayedProxySuggestedReelVariants.length > 0));
   const isBestPickWinnerSameAsIgSafe = Boolean(
     bestReelPick &&
       bestReelPick.winner.source === bestReelPick.ig_safe_pick.source &&
@@ -1538,9 +1588,9 @@ export default function Page() {
   const savedReelDraftVersions = activeSuggestions?.reel_draft_versions ?? [];
   const activeReelVariantSummary = activeSuggestions?.reel_variant_request_summary ?? null;
   const activeDescriptionMeta = workflowAlbum ? descriptionMetaByAlbum[workflowAlbum.id] ?? null : null;
-  const isVariantChoiceRequired = suggestedReelVariants.length > 0;
-  const workingReelDraft =
-    isVariantChoiceRequired && !selectedEditorVariantId ? null : editableReelDraft ?? activeSuggestions?.reel_draft ?? null;
+  const bestMixReelDraft =
+    activeSuggestions?.reel_draft?.draft_name?.includes("best-of-mix") ? activeSuggestions.reel_draft : null;
+  const workingReelDraft = selectedEditorVariantId ? editableReelDraft : null;
   const selectedEditorVariant =
     selectedEditorVariantId &&
     selectedEditorVariantId !== "__saved_version__" &&
@@ -1553,11 +1603,10 @@ export default function Page() {
       activeSuggestions?.reel_draft &&
       !areReelDraftsEquivalent(editableReelDraft, activeSuggestions.reel_draft)
   );
-  const renderSpec =
-    !isReelDraftDirty && workingReelDraft?.render_spec
-      ? workingReelDraft.render_spec
-      : workingReelDraft?.render_spec ?? activeSuggestions?.reel_draft?.render_spec ?? null;
+  const compareRenderSpec = activeSuggestions?.reel_draft?.render_spec ?? suggestedReelVariants[0]?.reel_draft.render_spec ?? null;
+  const renderSpec = workingReelDraft?.render_spec ?? null;
   const renderBackendAvailable = Boolean(renderSpec?.backend_available);
+  const compareRenderBackendAvailable = Boolean(compareRenderSpec?.backend_available);
   const proxyRenderSpec =
     activeProxySuggestions?.reel_draft?.render_spec ?? proxySuggestedReelVariants[0]?.reel_draft.render_spec ?? null;
   const proxyRenderBackendAvailable = Boolean(proxyRenderSpec?.backend_available);
@@ -1580,6 +1629,12 @@ export default function Page() {
     .filter((value): value is string => Boolean(value));
   const hasChosenReelMapSource = Boolean(selectedEditorVariantId && workingReelDraft && chosenReelMediaIds.length > 0);
   const canUseChosenReelMapMode = hasChosenReelMapSource || mapGenerationMode === "chosen_reel";
+  const chosenReelVariantIdForMap =
+    selectedEditorVariantId === "__best_pick__" && bestReelPick?.winner
+      ? `${bestReelPick.winner.source}:${bestReelPick.winner.variant_id}`
+      : selectedEditorVariantId === "__best_of_remix__"
+        ? "best-of-mix"
+        : selectedEditorVariantId ?? null;
   const selectedMapMediaIds = workflowAlbum?.map_entry?.selected_media_ids ?? [];
   const selectedMapMediaLabels = selectedMapMediaIds
     .map((mediaId) => workflowAlbum?.media_items.find((item) => item.id === mediaId)?.original_filename ?? null)
@@ -2353,6 +2408,7 @@ export default function Page() {
   useEffect(() => {
     setEditableReelDraft(null);
     setSelectedEditorVariantId(null);
+    setIsCompareFocusMode(false);
     setEditableMapDraft(buildMapDraftForm(workflowAlbum?.map_entry));
     setMapGenerationMode(inferMapGenerationMode(workflowAlbum?.map_entry));
     setMapPrompt(workflowAlbum?.map_entry?.generation_prompt ?? "");
@@ -2683,6 +2739,7 @@ export default function Page() {
       setSuggestionsByAlbum((current) => ({ ...current, [albumId]: data }));
       setEditableReelDraft(null);
       setSelectedEditorVariantId(null);
+      setIsCompareFocusMode(false);
       setSuggestionStatus({
         tone: "ok",
         message: successMessage ?? `AI review updated for ${selectionLabel}.`,
@@ -3410,6 +3467,7 @@ export default function Page() {
   function handleLoadReelDraftVersion(version: ReelDraftVersion) {
     setEditableReelDraft(cloneReelDraft(version.reel_draft));
     setSelectedEditorVariantId("__saved_version__");
+    setIsCompareFocusMode(false);
     setSuggestionStatus({
       tone: "ok",
       message: `Loaded saved version "${version.label}" into the editor. Apply or render when you are ready.`,
@@ -3456,9 +3514,47 @@ export default function Page() {
   function handleLoadReelVariant(variant: ReelDraftVariant) {
     setEditableReelDraft(cloneReelDraft(variant.reel_draft));
     setSelectedEditorVariantId(variant.variant_id);
+    setIsCompareFocusMode(true);
+    setMapGenerationMode("chosen_reel");
+    setReelFrameGallery(null);
+    setLoadedReelFrameGallerySignature("");
     setSuggestionStatus({
       tone: "ok",
       message: `Selected AI variant "${variant.label}". The editor is now unlocked for deeper changes.`,
+    });
+  }
+
+  function handleLoadProxyReelVariant(variant: ReelDraftVariant) {
+    setEditableReelDraft(cloneReelDraft(variant.reel_draft));
+    setSelectedEditorVariantId(`proxy:${variant.variant_id}`);
+    setIsCompareFocusMode(true);
+    setMapGenerationMode("chosen_reel");
+    setReelFrameGallery(null);
+    setLoadedReelFrameGallerySignature("");
+    setSuggestionStatus({
+      tone: "ok",
+      message: `Selected hybrid proxy reel "${variant.label}". The editor and map source are now unlocked.`,
+    });
+  }
+
+  function handleLoadBestMixReel() {
+    if (!bestMixReelDraft) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "The rendered best mix does not have an editable draft loaded yet. Rebuild the best mix once to refresh it.",
+      });
+      return;
+    }
+
+    setEditableReelDraft(cloneReelDraft(bestMixReelDraft));
+    setSelectedEditorVariantId("__best_of_remix__");
+    setIsCompareFocusMode(true);
+    setMapGenerationMode("chosen_reel");
+    setReelFrameGallery(null);
+    setLoadedReelFrameGallerySignature("");
+    setSuggestionStatus({
+      tone: "ok",
+      message: "Selected the rendered Best Mix. The editor and map source are now unlocked.",
     });
   }
 
@@ -3479,7 +3575,7 @@ export default function Page() {
       return;
     }
 
-    if (!renderBackendAvailable) {
+    if (!compareRenderBackendAvailable) {
       setSuggestionStatus({
         tone: "error",
         message: "Local reel rendering is disabled because ffmpeg is not installed on this machine yet.",
@@ -3604,7 +3700,7 @@ export default function Page() {
       const updatedAlbum = (await response.json()) as Album;
       syncAlbumStateFromApi(updatedAlbum);
       const winner = updatedAlbum.best_reel_pick?.winner;
-      setIsBestPickFocusMode(Boolean(winner));
+      setIsCompareFocusMode(Boolean(winner));
       setSuggestionStatus({
         tone: "ok",
         message: winner
@@ -3658,7 +3754,8 @@ export default function Page() {
       syncAlbumStateFromApi(data.album);
       setEditableReelDraft(cloneReelDraft(data.reel_draft));
       setSelectedEditorVariantId("__best_of_remix__");
-      setIsBestPickFocusMode(false);
+      setIsCompareFocusMode(true);
+      setMapGenerationMode("chosen_reel");
       setReelFrameGallery(null);
       setLoadedReelFrameGallerySignature("");
       setSuggestionStatus({
@@ -3688,12 +3785,16 @@ export default function Page() {
 
     setEditableReelDraft(cloneReelDraft(pick.reel_draft));
     setSelectedEditorVariantId("__best_pick__");
+    setIsCompareFocusMode(true);
+    setMapGenerationMode("chosen_reel");
+    setReelFrameGallery(null);
+    setLoadedReelFrameGallerySignature("");
     setSuggestionStatus({
       tone: "ok",
       message:
         pick.source === "proxy"
-          ? `Loaded "${pick.label}" into the editor. Rendering final will promote this hybrid reel into the main export.`
-          : `Loaded "${pick.label}" into the editor.`,
+          ? `Selected "${pick.label}" for editing and map handoff. Rendering final will promote this hybrid reel into the main export.`
+          : `Selected "${pick.label}" for editing and map handoff.`,
     });
   }
 
@@ -3830,7 +3931,7 @@ export default function Page() {
           generation_mode: mapGenerationMode,
           selected_media_ids: mapGenerationMode === "chosen_reel" ? chosenReelMediaIds : undefined,
           selected_reel_draft_name: mapGenerationMode === "chosen_reel" ? workingReelDraft?.draft_name ?? null : null,
-          selected_reel_variant_id: mapGenerationMode === "chosen_reel" ? selectedEditorVariantId ?? null : null,
+          selected_reel_variant_id: mapGenerationMode === "chosen_reel" ? chosenReelVariantIdForMap : null,
           selected_reel_title: mapGenerationMode === "chosen_reel" ? workingReelDraft?.title ?? null : null,
           selected_reel_caption: mapGenerationMode === "chosen_reel" ? workingReelDraft?.caption ?? null : null,
           selected_reel_video_strategy:
@@ -4047,7 +4148,9 @@ export default function Page() {
     const sourceVariantId =
       selectedEditorVariantId &&
       selectedEditorVariantId !== "__saved_version__" &&
-      selectedEditorVariantId !== "__best_of_remix__"
+      selectedEditorVariantId !== "__best_pick__" &&
+      selectedEditorVariantId !== "__best_of_remix__" &&
+      !selectedEditorVariantId.startsWith("proxy:")
         ? selectedEditorVariantId
         : null;
 
@@ -4158,6 +4261,9 @@ export default function Page() {
   const bestMixRenderedReel =
     workflowAlbum?.rendered_reel?.draft_name.includes("best-of-mix") ? workflowAlbum.rendered_reel : null;
   const bestMixPreviewUrl = bestMixRenderedReel ? renderedReelContentUrl : null;
+  const shouldShowBestMixCard = Boolean(
+    bestMixRenderedReel && bestMixPreviewUrl && (!focusedReelTarget || focusedReelTarget.source === "mix"),
+  );
   const selectedRenderedVariant =
     selectedEditorVariant
       ? renderedVariantRenders.find((item) => item.variant_id === selectedEditorVariant.variant_id) ?? null
@@ -4655,10 +4761,26 @@ export default function Page() {
               <div className="review-header">
                 <div>
                   <p className="eyebrow">Step 4</p>
-                  <h2>Review and AI analysis</h2>
+                  <h2>Reel review</h2>
                 </div>
                 <div className="review-meta">
                   {workflowAlbum.media_items.length} item(s) in {workflowAlbum.name}
+                </div>
+                <div className="actions review-mode-actions">
+                  <button
+                    className={!isFullReviewVisible ? "button-primary button-chip" : "button-secondary button-chip"}
+                    onClick={() => setIsFullReviewVisible(false)}
+                    type="button"
+                  >
+                    Reel focus
+                  </button>
+                  <button
+                    className={isFullReviewVisible ? "button-primary button-chip" : "button-secondary button-chip"}
+                    onClick={() => setIsFullReviewVisible(true)}
+                    type="button"
+                  >
+                    Full analysis
+                  </button>
                 </div>
               </div>
 
@@ -4786,6 +4908,8 @@ export default function Page() {
 
                   {activeSuggestions ? (
                     <div className="ai-grid">
+                      {isFullReviewVisible ? (
+                        <>
                       <div className="ai-card ai-card-wide">
                         <strong>Album read</strong>
                         <p>{activeSuggestions.album_summary}</p>
@@ -4848,90 +4972,26 @@ export default function Page() {
                           <p>No carousel picks yet.</p>
                         )}
                       </div>
-                      <div className="ai-card ai-card-wide">
-                        <strong>Reel candidates</strong>
-                        {activeSuggestions.reel_candidates.length > 0 ? (
-                          <div className="candidate-list">
-                            {activeSuggestions.reel_candidates.map((candidate) => (
-                              <div className="candidate-row" key={`reel-${candidate.media_id}`}>
-                                <div>
-                                  <strong>{getMediaLabel(candidate.media_id)}</strong>
-                                  <span>{candidate.reason}</span>
-                                </div>
-                                <em>{formatCandidateScore(candidate.score)}</em>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p>No reel candidates yet.</p>
-                        )}
-                      </div>
-                      <div className="ai-card ai-card-wide">
-                        <div className="reel-plan-header">
-                          <div>
-                            <strong>Reel plan</strong>
-                            <p>
-                              {activeSuggestions.reel_plan
-                                ? `${activeSuggestions.reel_plan.steps.length} beat(s) • estimated ${formatDuration(
-                                    activeSuggestions.reel_plan.estimated_total_duration_seconds,
-                                  )} • ${formatVideoStrategy(activeSuggestions.reel_plan.video_strategy)}`
-                                : "A step-by-step short-form sequence appears here after the reel read is built."}
-                            </p>
-                          </div>
-                          {activeSuggestions.reel_plan?.cover_media_id ? (
-                            <span className="reel-plan-cover">
-                              Cover: {getMediaLabel(activeSuggestions.reel_plan.cover_media_id)}
-                            </span>
-                          ) : null}
-                        </div>
-                        {activeSuggestions.reel_plan?.steps.length ? (
-                          <div className="reel-plan-list">
-                            {activeSuggestions.reel_plan.steps.map((step) => (
-                              <div className="reel-plan-step" key={`reel-plan-${step.step_number}-${step.media_id}`}>
-                                <div className="reel-plan-step-header">
-                                  <div>
-                                    <span className="reel-plan-index">Step {step.step_number}</span>
-                                    <strong>
-                                      {step.role}: {getMediaLabel(step.media_id)}
-                                    </strong>
-                                  </div>
-                                  <div className="reel-plan-meta">
-                                    <span>
-                                      {step.media_kind} • {formatSourceRole(step.source_role)}
-                                    </span>
-                                    {step.selection_mode === "video_clip" ? (
-                                      <span>{formatClipWindow(step.clip_start_seconds, step.clip_end_seconds)}</span>
-                                    ) : null}
-                                    <em>{formatDuration(step.suggested_duration_seconds)}</em>
-                                  </div>
-                                </div>
-                                <p>{step.edit_instruction}</p>
-                                <small>{step.why}</small>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p>No reel plan yet.</p>
-                        )}
-                      </div>
+                        </>
+                      ) : null}
                       {showStandardVariantPanel ? (
                       <div className="ai-card ai-card-wide">
                         <div className="reel-plan-header">
                           <div>
                             <strong>{suggestedReelVariants.length > 1 ? "AI reel variants" : "AI reel suggestion"}</strong>
                             <p>
-                              {focusedBestPickWinner
-                                ? "Showing only the AI Best Pick winner. Use Show all reels to restore the full compare grid."
+                              {focusedReelTarget
+                                ? "Showing only the chosen reel focus. Use Show all reels to restore the full compare grid."
                                 : suggestedReelVariants.length > 1
                                 ? "Render the AI variants first, compare the actual reels, then choose one to unlock manual editing."
                                 : "Render the AI reel suggestion first, then choose it to unlock manual editing."}
                             </p>
                           </div>
-                          {!focusedBestPickWinner && suggestedReelVariants.length > 0 ? (
+                          {!focusedReelTarget && suggestedReelVariants.length > 0 ? (
                             <div className="actions">
                               <button
                                 className="button-secondary"
-                                disabled={!renderBackendAvailable || isRenderingVariantSet}
+                                disabled={!compareRenderBackendAvailable || isRenderingVariantSet}
                                 onClick={() => void handleRenderReelVariants()}
                                 type="button"
                               >
@@ -5189,12 +5249,12 @@ export default function Page() {
                             <div>
                               <strong>Hybrid proxy reel variants</strong>
                               <p>
-                                {focusedBestPickWinner
-                                  ? "Showing only the AI Best Pick winner. Use Show all reels to restore the full compare grid."
+                                {focusedReelTarget
+                                  ? "Showing only the chosen reel focus. Use Show all reels to restore the full compare grid."
                                   : `Standard story structure with proxy-discovered detail beats. Analysis mode: ${activeProxySuggestions?.analysis_mode}.`}
                               </p>
                             </div>
-                            {!focusedBestPickWinner && proxySuggestedReelVariants.length > 0 ? (
+                            {!focusedReelTarget && proxySuggestedReelVariants.length > 0 ? (
                               <div className="actions">
                                 <button
                                   className="button-secondary"
@@ -5218,6 +5278,7 @@ export default function Page() {
                                   (item) => item.variant_id === variant.variant_id,
                                 );
                                 const renderedVariantUrl = getProxyRenderedVariantContentUrl(workflowAlbum, renderedVariant ?? null);
+                                const matchesEditor = proxyEditorVariantId === variant.variant_id;
                                 return (
                                   <div className="variant-render-card proxy-render-card" key={variant.variant_id}>
                                     <div className="variant-render-card-header">
@@ -5226,6 +5287,7 @@ export default function Page() {
                                         <span>
                                           {formatDuration(variant.target_duration_seconds)} • {variant.creative_angle} •{" "}
                                           {formatVideoStrategy(variant.reel_draft.video_strategy)}
+                                          {matchesEditor ? " • selected for editing/map" : ""}
                                         </span>
                                         <span>
                                           {variant.reel_draft.steps.length} beat(s) • {variant.reel_draft.title}
@@ -5241,6 +5303,14 @@ export default function Page() {
                                         )}
                                       </div>
                                       <div className="actions">
+                                        <button
+                                          className="button-secondary button-chip"
+                                          disabled={!renderedVariant}
+                                          onClick={() => handleLoadProxyReelVariant(variant)}
+                                          type="button"
+                                        >
+                                          Choose this reel
+                                        </button>
                                         <button
                                           className="button-secondary button-chip"
                                           disabled={!renderedVariant}
@@ -5299,19 +5369,19 @@ export default function Page() {
                             >
                               {isGeneratingBestOfRemix ? "Mixing..." : "Build best mix"}
                             </button>
-                            {bestReelPick ? (
+                            {canToggleCompareFocus ? (
                               <button
                                 className="button-secondary"
                                 disabled={isGeneratingBestPick || isGeneratingBestOfRemix}
-                                onClick={() => setIsBestPickFocusMode((current) => !current)}
+                                onClick={() => setIsCompareFocusMode((current) => !current)}
                                 type="button"
                               >
-                                {isBestPickFocusMode ? "Show all reels" : "Focus winner"}
+                                {focusToggleLabel}
                               </button>
                             ) : null}
                           </div>
                         </div>
-                        {bestMixRenderedReel && bestMixPreviewUrl ? (
+                        {shouldShowBestMixCard && bestMixRenderedReel && bestMixPreviewUrl ? (
                           <div className="best-mix-render-card">
                             <div className="reel-plan-header">
                               <div>
@@ -5326,6 +5396,14 @@ export default function Page() {
                                 </p>
                               </div>
                               <div className="actions">
+                                <button
+                                  className="button-primary button-chip"
+                                  disabled={!bestMixReelDraft}
+                                  onClick={handleLoadBestMixReel}
+                                  type="button"
+                                >
+                                  Choose mix
+                                </button>
                                 <button className="button-secondary button-chip" onClick={handleDownloadRenderedReel} type="button">
                                   Download mix
                                 </button>
@@ -5357,15 +5435,15 @@ export default function Page() {
                               <p>{bestReelPick.winner.reason}</p>
                               <div className="actions">
                                 <button
-                                  className="button-secondary button-chip"
+                                  className="button-primary button-chip"
                                   disabled={!bestReelPick.winner.reel_draft}
                                   onClick={() => handleLoadBestPickWinner(bestReelPick.winner)}
                                   type="button"
                                 >
-                                  Load winner in editor
+                                  Choose winner
                                 </button>
                               </div>
-                              {bestPickWinnerPreviewUrl && !focusedBestPickWinner ? (
+                              {bestPickWinnerPreviewUrl && !focusedReelTarget ? (
                                 <div className="render-preview variant-render-preview">
                                   <video controls preload="metadata" src={bestPickWinnerPreviewUrl} />
                                 </div>
@@ -5379,7 +5457,7 @@ export default function Page() {
                                   ? "Same reel as the Best Story pick. No duplicate preview shown."
                                   : bestReelPick.ig_safe_pick.reason}
                               </p>
-                              {bestPickIgSafePreviewUrl && !isBestPickWinnerSameAsIgSafe && !focusedBestPickWinner ? (
+                              {bestPickIgSafePreviewUrl && !isBestPickWinnerSameAsIgSafe && !focusedReelTarget ? (
                                 <div className="render-preview variant-render-preview">
                                   <video controls preload="metadata" src={bestPickIgSafePreviewUrl} />
                                 </div>
@@ -5498,13 +5576,15 @@ export default function Page() {
                       <div className="ai-card ai-card-wide">
                         <div className="reel-plan-header">
                           <div>
-                            <strong>Reel draft export</strong>
+                            <strong>Chosen reel editor</strong>
                             <p>
                               {workingReelDraft
-                                ? `${workingReelDraft.output_width}x${workingReelDraft.output_height} • ${workingReelDraft.fps} fps • ${workingReelDraft.assets.length} asset(s) • ${formatVideoStrategy(workingReelDraft.video_strategy)}`
+                                ? `${workingReelDraft.output_width}x${workingReelDraft.output_height} • ${workingReelDraft.fps} fps • ${formatDuration(
+                                    workingReelDraft.estimated_total_duration_seconds,
+                                  )} • ${formatVideoStrategy(workingReelDraft.video_strategy)}`
                                 : suggestedReelVariants.length > 0
-                                  ? "Pick one rendered compare reel above to unlock the detailed editor, final render, filters, and export actions."
-                                  : "A downloadable reel draft manifest appears here after the AI review runs."}
+                                  ? "Pick one rendered compare reel, AI Best Pick, or Best Mix to unlock deeper editing."
+                                  : "Run the AI review and render compare reels first."}
                             </p>
                             {selectedEditorVariant ? (
                               <p>Editing the chosen reel above. Step changes below will affect that same reel workspace.</p>
@@ -5515,7 +5595,7 @@ export default function Page() {
                               <button className="button-secondary" onClick={handleCopyReelCaption} type="button">
                                 Copy caption
                               </button>
-                              {renderSpec?.shell_commands.length ? (
+                              {isFullReviewVisible && renderSpec?.shell_commands.length ? (
                                 <button className="button-secondary" onClick={handleCopyRenderCommands} type="button">
                                   Copy render commands
                                 </button>
@@ -5544,7 +5624,7 @@ export default function Page() {
                               >
                                 Reset edits
                               </button>
-                              {!selectedEditorVariant ? (
+                              {selectedEditorVariantId && !selectedEditorVariant ? (
                                 <button
                                   className="button-secondary"
                                   disabled={!renderBackendAvailable || isRenderingReel || isSavingReelDraft}
@@ -5557,12 +5637,12 @@ export default function Page() {
                                   type="button"
                                 >
                                   {isRenderingReel
-                                    ? "Rendering..."
+                                    ? "Rendering final reel..."
                                     : !renderBackendAvailable
                                       ? "ffmpeg required"
                                     : workflowAlbum?.rendered_reel
-                                      ? "Re-render reel"
-                                      : "Render reel"}
+                                      ? "Re-render final reel"
+                                      : "Render final reel"}
                                 </button>
                               ) : null}
                               <button className="button-primary" onClick={handleDownloadReelDraft} type="button">
@@ -5668,6 +5748,7 @@ export default function Page() {
                                 </span>
                               </div>
                             ) : null}
+                            {isFullReviewVisible ? (
                             <div className="ai-card ai-card-wide">
                               <strong>Draft assets</strong>
                               <div className="candidate-list">
@@ -5684,6 +5765,8 @@ export default function Page() {
                                 ))}
                               </div>
                             </div>
+                            ) : null}
+                            {isFullReviewVisible ? (
                             <div className="ai-card ai-card-wide">
                               <div className="reel-plan-header">
                                 <div>
@@ -5735,6 +5818,7 @@ export default function Page() {
                                 <p>No saved versions yet. Save the current draft when you want an alternate edit path.</p>
                               )}
                             </div>
+                            ) : null}
                             <div className="ai-card ai-card-wide">
                               <div className="reel-plan-header">
                                 <div>
@@ -5963,7 +6047,7 @@ export default function Page() {
                                 })}
                               </div>
                             </div>
-                            {renderSpec ? (
+                            {isFullReviewVisible && renderSpec ? (
                               <div className="ai-card ai-card-wide">
                                 <div className="reel-plan-header">
                                   <div>
@@ -5996,7 +6080,7 @@ export default function Page() {
                                 {!renderBackendAvailable ? (
                                   <div className="render-note-list">
                                     <div className="render-note">
-                                      Install `ffmpeg` locally to enable the `Render reel` button and generate a final preview video in this app.
+                                      Install `ffmpeg` locally to enable final reel rendering and generate a preview video in this app.
                                     </div>
                                   </div>
                                 ) : null}
@@ -6044,7 +6128,7 @@ export default function Page() {
                                 </details>
                               </div>
                             ) : null}
-                            {workflowAlbum?.rendered_reel && !selectedEditorVariant ? (
+                            {workflowAlbum?.rendered_reel && selectedEditorVariantId && !selectedEditorVariant && !bestMixRenderedReel ? (
                               <div className="ai-card ai-card-wide">
                                 <div className="reel-plan-header">
                                   <div>
@@ -6093,6 +6177,7 @@ export default function Page() {
                           <p>No reel draft available yet.</p>
                         )}
                       </div>
+                      {isFullReviewVisible ? (
                       <div className="ai-card ai-card-wide">
                         <strong>Shot groups</strong>
                         {activeSuggestions.shot_groups.length > 0 ? (
@@ -6113,6 +6198,7 @@ export default function Page() {
                           <p>No duplicate-style groups detected yet.</p>
                         )}
                       </div>
+                      ) : null}
                     </div>
                   ) : null}
                   {!activeSuggestions && activeProxySuggestions ? (
@@ -6551,6 +6637,7 @@ export default function Page() {
                 </div>
               </div>
 
+              {isFullReviewVisible ? (
               <div className="media-grid">
                 {workflowAlbum.media_items.map((item) => {
                   const mediaUrl = `${API_BASE_URL}/albums/${item.album_id}/media/${item.id}/content`;
@@ -6800,6 +6887,15 @@ export default function Page() {
                   );
                 })}
               </div>
+              ) : (
+                <div className="compact-review-note">
+                  <strong>Media details hidden</strong>
+                  <span>
+                    Reel focus is showing the compare reels, pick, mix, frames, and map handoff. Switch to Full analysis
+                    when you need raw media cards, metadata, processing controls, or per-photo AI notes.
+                  </span>
+                </div>
+              )}
             </section>
           ) : null}
         </div>

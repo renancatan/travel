@@ -140,6 +140,18 @@
   - sidebar can select individual albums or select all
   - delete selected albums uses the existing album delete API and confirmation dialog
   - intended for clearing `storage/local` safely after heavy-video testing
+- [x] Clean the reel review UI around the current product direction:
+  - Step 4 now defaults to `Reel focus`, showing compare reels, AI Best Pick, Best Mix, selected frames, chosen-reel editing, and map handoff
+  - `Full analysis` reveals lower-level album/media/debug details such as album read, cover/carousel picks, draft assets, saved versions, render specs, shot groups, and raw media cards
+  - removed the old single-reel `Reel candidates` / `Reel plan` UI path from the screen so the user is guided through rendered compare reels and explicit pick/mix decisions
+- [x] Make focused winners and best mixes selectable as real chosen reels:
+  - proxy/focused winner cards now expose `Choose this reel`
+  - rendered Best Mix now exposes `Choose mix`
+  - choosing any standard/proxy/best-pick/best-mix reel unlocks the chosen-reel editor, selects map `chosen_reel` mode, and resets stale extracted frames
+- [x] Tighten chosen-reel focus behavior across all reel sources:
+  - standard, proxy, AI Best Pick, and Best Mix choices now share one compare-focus state
+  - choosing a reel hides unrelated compare reels until `Show all reels` is clicked
+  - `Show all reels` restores the compare grid without clearing the chosen reel editor/map source
 - [x] Export a render-ready reel draft spec with clip windows and `ffmpeg` command planning.
 - [x] Add a real local reel render action plus preview/download flow.
 - [x] Validate real local reel rendering with installed `ffmpeg`.

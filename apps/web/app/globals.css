@@ -385,6 +385,11 @@ button {
   flex-wrap: wrap;
 }
 
+.review-mode-actions {
+  justify-content: flex-end;
+  margin-left: auto;
+}
+
 .mode-switch {
   display: inline-flex;
   gap: 8px;
@@ -1174,6 +1179,28 @@ button {
 
 .ai-inline-note strong {
   color: var(--ink);
+}
+
+.compact-review-note {
+  align-items: center;
+  border: 1px dashed rgba(20, 108, 106, 0.24);
+  background: rgba(255, 255, 255, 0.58);
+  border-radius: 18px;
+  color: var(--muted);
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  margin-top: 18px;
+  padding: 14px 16px;
+}
+
+.compact-review-note strong {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.compact-review-note span {
+  line-height: 1.45;
 }
 
 .processing-note-long_form {

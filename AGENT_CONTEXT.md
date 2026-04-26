@@ -321,6 +321,12 @@ Implemented in `apps/web`:
   - `reel_variant_mix` now asks the configured model for an ordered cut plan from existing candidate draft windows before rendering, then falls back to the deterministic winner-skeleton heuristic if GPT/Gemini credentials, quota, or network are unavailable
   - `gpt54` normalizes to the existing Azure GPT-5-family route; to test GPT-5.4, point `AZURE_OPENAI_GPT5_DEPLOYMENT` at the GPT-5.4 deployment and keep the feature alias as `gpt54` or `gpt5`
   - `/runtime` exposes the current AI feature model map so the UI/dev shell can inspect which macro feature is assigned to which model
+- 2026-04-26 reel UI cleanup:
+  - Step 4 now defaults to a compact `Reel focus` mode so the main screen emphasizes rendered compare reels, AI Best Pick, Best Mix, selected frames, chosen-reel editing, and map handoff
+  - `Full analysis` is the escape hatch for lower-level album/media/debug details: album read, cover/carousel picks, draft assets, saved versions, render spec/commands, shot groups, and raw media cards
+  - removed the old on-screen `Reel candidates` / `Reel plan` path so the product no longer visually encourages the legacy one-reel draft flow; final rendering is tied to a chosen reel workspace
+  - focused/proxy winner cards and rendered Best Mix now have explicit choose actions; selecting standard/proxy/best-pick/best-mix reels loads the draft into the chosen-reel editor, switches map mode to `chosen_reel`, and clears stale frame-gallery state
+  - compare-grid focus is now generic instead of AI-Best-Pick-only: selecting any standard/proxy/winner/mix reel hides unrelated reel previews until `Show all reels` is clicked, while preserving the chosen editor/map source
 
 ### Confirmed working
 
