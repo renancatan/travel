@@ -19,6 +19,7 @@ except ImportError:  # pragma: no cover - optional dependency path
     types = None
 
 from services.api.app.core.llm_router import MultiProviderRouter
+from services.api.app.core.ai_feature_models import get_ai_feature_model
 from services.api.app.core.reel_variant_presets import (
     get_reel_creative_profiles,
     get_reel_variant_policy,
@@ -51,6 +52,10 @@ class AlbumSuggestionService:
     def __init__(self) -> None:
         settings = get_settings()
         self.router = MultiProviderRouter()
+        self.album_review_ai_model = get_ai_feature_model("album_review")
+        self.album_description_ai_model = get_ai_feature_model("album_description")
+        self.best_pick_ai_model = get_ai_feature_model("reel_best_pick")
+        self.best_mix_ai_model = get_ai_feature_model("reel_variant_mix")
         self.gemini_api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
         self.gemini_model = os.getenv("GEMINI_REASONING_MODEL") or os.getenv("GEMINI_FAST_MODEL") or "gemini-2.5-flash"
         self.gemini_client = genai.Client(api_key=self.gemini_api_key) if self.gemini_api_key and genai else None
@@ -67,9 +72,10 @@ class AlbumSuggestionService:
         analysis_profile: str = "standard",
     ) -> dict[str, Any]:
         normalized_analysis_profile = self._normalize_analysis_profile(analysis_profile)
+        use_gemini_multimodal = self._feature_prefers_gemini(self.album_review_ai_model)
         multimodal_parts = (
             self._build_multimodal_parts(album, analysis_profile=normalized_analysis_profile)
-            if self.gemini_client and types
+            if use_gemini_multimodal and self.gemini_client and types
             else []
         )
         if self.gemini_client and multimodal_parts:
@@ -106,7 +112,7 @@ class AlbumSuggestionService:
 
         prompt = self._build_text_prompt(album, analysis_profile=normalized_analysis_profile)
         try:
-            data = self.router.ask_json(prompt, model_alias="ggl2")
+            data = self.router.ask_json(prompt, model_alias=str(self.album_review_ai_model["model_alias"]))
             normalized_data = self._normalize_suggestion_payload(data, album)
             curation_payload = self._build_curation_payload(
                 album,
@@ -149,8 +155,13 @@ class AlbumSuggestionService:
     def _analysis_mode(base_mode: str, analysis_profile: str) -> str:
         return f"proxy_{base_mode}" if analysis_profile == "proxy" else base_mode
 
+    @staticmethod
+    def _feature_prefers_gemini(config: dict[str, Any]) -> bool:
+        return MultiProviderRouter._normalize_alias(str(config.get("model_alias") or "")) == "ggl2"
+
     def generate_description(self, album: dict[str, Any]) -> dict[str, Any]:
-        multimodal_parts = self._build_multimodal_description_parts(album) if self.gemini_client and types else []
+        use_gemini_multimodal = self._feature_prefers_gemini(self.album_description_ai_model)
+        multimodal_parts = self._build_multimodal_description_parts(album) if use_gemini_multimodal and self.gemini_client and types else []
         if self.gemini_client and multimodal_parts:
             try:
                 response = self.gemini_client.models.generate_content(
@@ -177,7 +188,7 @@ class AlbumSuggestionService:
 
         prompt = self._build_description_text_prompt(album)
         try:
-            data = self.router.ask_json(prompt, model_alias="ggl2")
+            data = self.router.ask_json(prompt, model_alias=str(self.album_description_ai_model["model_alias"]))
             return {
                 **self._normalize_description_payload(data),
                 "analysis_mode": "metadata_fallback",
@@ -265,6 +276,82 @@ class AlbumSuggestionService:
 
         return self._build_heuristic_best_reel_pick(album, candidates)
 
+    def generate_best_of_reel_remix(self, album: dict[str, Any]) -> dict[str, Any]:
+        candidates = self._build_best_pick_candidates(album)
+        if not candidates:
+            raise ValueError("Render at least one standard or hybrid reel variant before building a best-of mix.")
+
+        best_pick = album.get("best_reel_pick")
+        if not isinstance(best_pick, dict):
+            best_pick = self._build_heuristic_best_reel_pick(album, candidates)
+
+        ranking_scores = self._build_best_pick_score_map(best_pick, candidates)
+        winner = self._resolve_best_pick_candidate(best_pick.get("winner"), candidates)
+        if winner is None:
+            winner = max(candidates, key=lambda candidate: ranking_scores.get(self._candidate_key(candidate), 0.0))
+
+        ai_selection = self._select_best_of_remix_steps_with_ai(candidates, winner, ranking_scores)
+        selected_items = ai_selection.get("items") if isinstance(ai_selection.get("items"), list) else []
+        selection_mode = "ai_guided_best_of_remix" if selected_items else "draft_best_of_remix"
+        model_resolution = ai_selection.get("model_resolution") if selected_items else ai_selection.get("model_resolution")
+        selection_reason = str(ai_selection.get("reason") or "").strip()
+        if not selected_items:
+            selected_items = self._select_best_of_remix_steps(candidates, winner, ranking_scores)
+            selection_reason = (
+                selection_reason
+                or "Built an editable best-of mix from the strongest non-overlapping cuts across rendered standard "
+                "and proxy-hybrid variants. It reuses existing draft windows and renders from source media later."
+            )
+        if not selected_items:
+            raise ValueError("Could not find enough distinct scenes to build a best-of mix.")
+
+        winner_draft = winner.get("reel_draft") if isinstance(winner.get("reel_draft"), dict) else {}
+        album_slug = self._slugify(str(album.get("name") or "album")) or "album"
+        remix_title = f"{album.get('name') or winner_draft.get('title') or 'Travel reel'} - Best-of Mix"
+        existing_draft = deepcopy(winner_draft)
+        existing_draft["draft_name"] = f"{album_slug}-best-of-mix-draft"
+        existing_draft["title"] = remix_title
+
+        draft_payload = {
+            "title": remix_title,
+            "caption": winner_draft.get("caption") or album.get("description") or remix_title,
+            "cover_media_id": selected_items[0]["step"].get("media_id"),
+            "audio_strategy": winner_draft.get("audio_strategy"),
+            "filter_settings": winner_draft.get("filter_settings"),
+            "steps": [
+                self._build_best_of_remix_step_payload(item)
+                for item in selected_items
+            ],
+        }
+        reel_draft = self.rebuild_reel_draft(album, draft_payload, existing_draft=existing_draft)
+
+        source_summary = self._summarize_best_of_remix_sources(selected_items)
+        video_seconds = sum(
+            float(step.get("suggested_duration_seconds") or 0.0)
+            for step in reel_draft.get("steps", [])
+            if str(step.get("media_kind") or "") == "video"
+        )
+        image_seconds = sum(
+            float(step.get("suggested_duration_seconds") or 0.0)
+            for step in reel_draft.get("steps", [])
+            if str(step.get("media_kind") or "") == "image"
+        )
+
+        return {
+            "album_id": album.get("id"),
+            "album_name": album.get("name"),
+            "generated_at": datetime.now(UTC).isoformat(),
+            "analysis_mode": selection_mode,
+            "ai_feature": self._public_ai_feature_config(self.best_mix_ai_model),
+            "model_resolution": model_resolution,
+            "reel_draft": reel_draft,
+            "source_summary": source_summary,
+            "target_duration_seconds": reel_draft.get("estimated_total_duration_seconds"),
+            "video_seconds": round(video_seconds, 1),
+            "image_seconds": round(image_seconds, 1),
+            "reason": selection_reason,
+        }
+
     def _build_best_pick_candidates(self, album: dict[str, Any]) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         for source, suggestion_key in (
@@ -347,8 +434,645 @@ class AlbumSuggestionService:
 
         return candidates
 
+    @staticmethod
+    def _candidate_key(candidate: dict[str, Any]) -> tuple[str, str]:
+        return (str(candidate.get("source") or ""), str(candidate.get("variant_id") or ""))
+
+    def _build_best_pick_score_map(
+        self,
+        best_pick: dict[str, Any],
+        candidates: list[dict[str, Any]],
+    ) -> dict[tuple[str, str], float]:
+        score_map: dict[tuple[str, str], float] = {}
+        ranking_rows = best_pick.get("rankings") if isinstance(best_pick.get("rankings"), list) else []
+        for row in ranking_rows:
+            if not isinstance(row, dict):
+                continue
+            source = str(row.get("source") or "").strip()
+            variant_id = str(row.get("variant_id") or "").strip()
+            if not source or not variant_id:
+                continue
+            score_map[(source, variant_id)] = max(0.0, min(100.0, self._to_float(row.get("score")) or 0.0))
+
+        for candidate in candidates:
+            key = self._candidate_key(candidate)
+            if key not in score_map:
+                score_map[key] = float(self._score_best_pick_candidate(candidate)["score"])
+        return score_map
+
+    def _resolve_best_pick_candidate(
+        self,
+        pick: Any,
+        candidates: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        if not isinstance(pick, dict):
+            return None
+        source = str(pick.get("source") or "").strip()
+        variant_id = str(pick.get("variant_id") or "").strip()
+        for candidate in candidates:
+            if str(candidate.get("source") or "") == source and str(candidate.get("variant_id") or "") == variant_id:
+                return candidate
+        return None
+
+    @staticmethod
+    def _public_ai_feature_config(config: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "label": str(config.get("label") or ""),
+            "model_alias": str(config.get("model_alias") or ""),
+            "fallback_model_alias": str(config.get("fallback_model_alias") or ""),
+            "note": str(config.get("note") or ""),
+        }
+
+    def _build_best_of_remix_pool(
+        self,
+        candidates: list[dict[str, Any]],
+        winner: dict[str, Any],
+        ranking_scores: dict[tuple[str, str], float],
+    ) -> list[dict[str, Any]]:
+        winner_key = self._candidate_key(winner)
+        pool: list[dict[str, Any]] = []
+        for candidate in candidates:
+            candidate_key = self._candidate_key(candidate)
+            variant_score = ranking_scores.get(candidate_key, float(self._score_best_pick_candidate(candidate)["score"]))
+            steps = [step for step in candidate.get("reel_draft", {}).get("steps", []) if isinstance(step, dict)]
+            for index, step in enumerate(steps):
+                duration = self._step_duration_seconds(step)
+                if duration <= 0:
+                    continue
+                score = self._score_best_of_remix_step(
+                    step,
+                    candidate,
+                    variant_score=variant_score,
+                    is_winner_candidate=candidate_key == winner_key,
+                    index=index,
+                    total_steps=len(steps),
+                )
+                pool.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_key": candidate_key,
+                        "step": step,
+                        "index": index,
+                        "total_steps": len(steps),
+                        "score": score,
+                        "duration_seconds": duration,
+                        "sequence_group": self._best_of_remix_sequence_group(step, index, len(steps)),
+                    }
+                )
+        return pool
+
+    def _select_best_of_remix_steps_with_ai(
+        self,
+        candidates: list[dict[str, Any]],
+        winner: dict[str, Any],
+        ranking_scores: dict[tuple[str, str], float],
+    ) -> dict[str, Any]:
+        pool = self._build_best_of_remix_pool(candidates, winner, ranking_scores)
+        if not pool:
+            return {"items": [], "reason": "No remix cut pool was available for AI planning."}
+
+        catalog = self._build_best_of_remix_ai_catalog(pool, winner)
+        if not catalog:
+            return {"items": [], "reason": "No valid remix catalog rows were available for AI planning."}
+
+        target_duration = self._best_of_remix_target_duration(winner)
+        prompt = self._build_best_of_remix_ai_prompt(
+            catalog=catalog,
+            winner=winner,
+            target_duration=target_duration,
+        )
+        model_aliases = [
+            str(self.best_mix_ai_model.get("model_alias") or "").strip(),
+            str(self.best_mix_ai_model.get("fallback_model_alias") or "").strip(),
+        ]
+        model_aliases = [alias for index, alias in enumerate(model_aliases) if alias and alias not in model_aliases[:index]]
+        errors: list[str] = []
+        self.router.last_resolution = None
+
+        for model_alias in model_aliases:
+            try:
+                payload = self.router.ask_json(prompt, model_alias=model_alias, temperature=0.1)
+                selected_items = self._materialize_best_of_remix_ai_plan(
+                    payload,
+                    pool=pool,
+                    winner=winner,
+                    ranking_scores=ranking_scores,
+                    target_duration=target_duration,
+                )
+                if selected_items:
+                    return {
+                        "items": selected_items,
+                        "model_resolution": self.router.get_last_resolution(),
+                        "reason": str(
+                            payload.get("reason")
+                            or "AI-guided best-of mix planned from the strongest existing candidate cuts."
+                        ).strip(),
+                    }
+            except Exception as exc:
+                errors.append(f"{model_alias}: {exc}")
+
+        reason = "AI mix planning was unavailable, so the remix used the deterministic highlight heuristic."
+        if errors:
+            reason = f"{reason} Planner errors: {'; '.join(errors)[:420]}"
+        return {
+            "items": [],
+            "model_resolution": self.router.get_last_resolution(),
+            "reason": reason,
+        }
+
+    def _build_best_of_remix_ai_catalog(
+        self,
+        pool: list[dict[str, Any]],
+        winner: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        winner_key = self._candidate_key(winner)
+        winner_rows = [
+            item
+            for item in sorted(pool, key=lambda item: int(item.get("index") or 0))
+            if item.get("candidate_key") == winner_key
+        ]
+        alternate_rows = [
+            item
+            for item in sorted(pool, key=lambda item: float(item.get("score") or 0.0), reverse=True)
+            if item.get("candidate_key") != winner_key and str(item.get("step", {}).get("media_kind") or "") == "video"
+        ]
+
+        rows: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for item in [*winner_rows[:14], *alternate_rows[:24]]:
+            step = item["step"]
+            candidate = item["candidate"]
+            step_id = self._best_of_remix_item_id(item)
+            if step_id in seen_ids:
+                continue
+            seen_ids.add(step_id)
+            rows.append(
+                {
+                    "id": step_id,
+                    "source": candidate.get("source"),
+                    "variant_id": candidate.get("variant_id"),
+                    "label": candidate.get("label"),
+                    "variant_score": round(float(item.get("score") or 0.0), 2),
+                    "step_index": int(item.get("index") or 0),
+                    "kind": step.get("media_kind"),
+                    "role": step.get("role"),
+                    "source_role": step.get("source_role"),
+                    "duration_seconds": self._step_duration_seconds(step),
+                    "clip_start_seconds": step.get("clip_start_seconds"),
+                    "clip_end_seconds": step.get("clip_end_seconds"),
+                    "why": str(step.get("why") or step.get("edit_instruction") or "").strip()[:220],
+                }
+            )
+        return rows
+
+    @staticmethod
+    def _best_of_remix_item_id(item: dict[str, Any]) -> str:
+        candidate = item["candidate"]
+        return f"{candidate.get('source')}:{candidate.get('variant_id')}:{int(item.get('index') or 0)}"
+
+    def _build_best_of_remix_ai_prompt(
+        self,
+        *,
+        catalog: list[dict[str, Any]],
+        winner: dict[str, Any],
+        target_duration: float,
+    ) -> str:
+        return (
+            "You are planning a best-of travel reel remix from existing rendered reel drafts.\n"
+            "This is NOT a brand-new raw-video analysis. Use only the catalog ids provided.\n\n"
+            "Product taste rules:\n"
+            "- Treat the AI Best Pick winner as the story skeleton.\n"
+            "- Insert only the strongest alternate moments when they are clearly better or more distinctive.\n"
+            "- Prefer epic/scenic/action/animal/diver moments over repetitive static texture.\n"
+            "- For dive footage, fish, coral life, diver scale, light shafts, turtles, boats, and clear motion beat plain reef texture.\n"
+            "- Keep video clips punchy: usually 4.5s to 6.8s; avoid 8s+ static shots.\n"
+            "- Use still images only as very brief memory beats, and only if they add meaning.\n"
+            "- Avoid duplicate or near-overlapping windows from the same source video.\n"
+            "- Aim for a coherent 45s to 60s edit when enough video exists.\n\n"
+            "Return ONLY JSON with this shape:\n"
+            "{\n"
+            '  "ordered_steps": [\n'
+            '    {"id": "source:variant:index", "duration_seconds": 5.8, "source_note": "winner skeleton|highlight insert|brief memory still"}\n'
+            "  ],\n"
+            '  "reason": "one short explanation"\n'
+            "}\n\n"
+            f"Target duration seconds: {round(target_duration, 1)}\n"
+            f"Winner candidate: {winner.get('source')} / {winner.get('variant_id')} / {winner.get('label')}\n"
+            f"Catalog:\n{json.dumps(catalog, indent=2, ensure_ascii=True)}"
+        )
+
+    def _materialize_best_of_remix_ai_plan(
+        self,
+        payload: dict[str, Any],
+        *,
+        pool: list[dict[str, Any]],
+        winner: dict[str, Any],
+        ranking_scores: dict[tuple[str, str], float],
+        target_duration: float,
+    ) -> list[dict[str, Any]]:
+        rows = payload.get("ordered_steps")
+        if not isinstance(rows, list):
+            return []
+
+        pool_by_id = {self._best_of_remix_item_id(item): item for item in pool}
+        selected: list[dict[str, Any]] = []
+        image_seconds = 0.0
+        for row in rows[:12]:
+            if not isinstance(row, dict):
+                continue
+            item = pool_by_id.get(str(row.get("id") or "").strip())
+            if item is None:
+                continue
+            step = item["step"]
+            if any(self._remix_steps_overlap(step, existing["step"], threshold=0.5) for existing in selected):
+                continue
+            media_kind = str(step.get("media_kind") or "")
+            duration = self._to_float(row.get("duration_seconds"))
+            duration = self._clamp_best_of_ai_duration(item, duration)
+            if media_kind == "image":
+                if image_seconds >= 3.0:
+                    continue
+                duration = min(duration, 3.0 - image_seconds)
+                image_seconds += duration
+            selected.append(
+                self._prepare_best_of_remix_item(
+                    item,
+                    source_note=str(row.get("source_note") or "AI selected cut").strip()[:80],
+                    duration_seconds=duration,
+                )
+            )
+
+        min_target_duration = self._best_of_remix_min_target_duration(target_duration)
+        if self._remix_video_count(selected) < 4 or self._remix_duration(selected) < min(34.0, min_target_duration):
+            return []
+
+        if self._remix_duration(selected) < min_target_duration:
+            heuristic_items = self._select_best_of_remix_steps_from_pool(pool, winner, ranking_scores)
+            for item in heuristic_items:
+                if len(selected) >= 12 or self._remix_duration(selected) >= min_target_duration:
+                    break
+                if str(item["step"].get("media_kind") or "") != "video":
+                    continue
+                if any(self._remix_steps_overlap(item["step"], existing["step"], threshold=0.5) for existing in selected):
+                    continue
+                selected.append(item)
+
+        return selected[:12]
+
+    def _clamp_best_of_ai_duration(self, item: dict[str, Any], requested_duration: float | None) -> float:
+        cap = self._best_of_remix_highlight_duration(item)
+        media_kind = str(item.get("step", {}).get("media_kind") or "")
+        if requested_duration is None:
+            return cap
+        if media_kind == "image":
+            return round(max(0.5, min(2.0, requested_duration, cap)), 1)
+        return round(max(2.5, min(cap, requested_duration, 7.2)), 1)
+
+    @staticmethod
+    def _remix_video_count(items: list[dict[str, Any]]) -> int:
+        return sum(1 for item in items if str(item.get("step", {}).get("media_kind") or "") == "video")
+
+    def _best_of_remix_target_duration(self, winner: dict[str, Any]) -> float:
+        return min(
+            60.0,
+            max(
+                12.0,
+                self._to_float(winner.get("target_duration_seconds"))
+                or self._to_float(winner.get("estimated_total_duration_seconds"))
+                or 60.0,
+            ),
+        )
+
+    @staticmethod
+    def _best_of_remix_min_target_duration(target_duration: float) -> float:
+        return min(target_duration, max(42.0, target_duration * 0.9))
+
+    def _select_best_of_remix_steps(
+        self,
+        candidates: list[dict[str, Any]],
+        winner: dict[str, Any],
+        ranking_scores: dict[tuple[str, str], float],
+    ) -> list[dict[str, Any]]:
+        pool = self._build_best_of_remix_pool(candidates, winner, ranking_scores)
+        return self._select_best_of_remix_steps_from_pool(pool, winner, ranking_scores)
+
+    def _select_best_of_remix_steps_from_pool(
+        self,
+        pool: list[dict[str, Any]],
+        winner: dict[str, Any],
+        ranking_scores: dict[tuple[str, str], float],
+    ) -> list[dict[str, Any]]:
+        winner_key = self._candidate_key(winner)
+        target_duration = self._best_of_remix_target_duration(winner)
+        min_target_duration = self._best_of_remix_min_target_duration(target_duration)
+        max_image_seconds = 3.0 if target_duration >= 45.0 else 2.0
+        max_steps = 12
+
+        if not pool:
+            return []
+
+        pool.sort(
+            key=lambda item: (
+                -float(item["score"]),
+                item["candidate_key"] != winner_key,
+                item["index"],
+            )
+        )
+        deduped: list[dict[str, Any]] = []
+        for item in pool:
+            if any(self._remix_steps_overlap(item["step"], existing["step"], threshold=0.58) for existing in deduped):
+                continue
+            deduped.append(item)
+
+        winner_items = sorted(
+            [item for item in pool if item["candidate_key"] == winner_key],
+            key=lambda item: int(item.get("index") or 0),
+        )
+        winner_videos = [item for item in winner_items if str(item["step"].get("media_kind") or "") == "video"]
+        winner_images = [item for item in winner_items if str(item["step"].get("media_kind") or "") == "image"]
+        if not winner_videos:
+            winner_videos = [
+                item
+                for item in deduped
+                if str(item["step"].get("media_kind") or "") == "video"
+            ][:4]
+
+        alternate_pool = [
+            item
+            for item in deduped
+            if item["candidate_key"] != winner_key
+            and str(item["step"].get("media_kind") or "") == "video"
+            and not any(self._remix_steps_overlap(item["step"], winner_item["step"], threshold=0.72) for winner_item in winner_videos)
+        ]
+        alternate_pool.sort(
+            key=lambda item: (
+                not self._is_proxy_detail_step(item["step"]),
+                str(item["candidate"].get("source") or "") != "proxy",
+                -float(item.get("score") or 0.0),
+                int(item.get("index") or 0),
+            )
+        )
+        selected_alternates: list[dict[str, Any]] = []
+        for item in alternate_pool:
+            if len(selected_alternates) >= 3:
+                break
+            if any(self._remix_steps_overlap(item["step"], existing["step"], threshold=0.5) for existing in selected_alternates):
+                continue
+            selected_alternates.append(item)
+
+        selected: list[dict[str, Any]] = []
+        alternate_index = 0
+        for index, item in enumerate(winner_videos):
+            if len(selected) >= max_steps:
+                break
+            selected.append(self._prepare_best_of_remix_item(item, source_note="winner skeleton"))
+            if index in {1, 2, 3} and alternate_index < len(selected_alternates) and len(selected) < max_steps:
+                selected.append(
+                    self._prepare_best_of_remix_item(
+                        selected_alternates[alternate_index],
+                        source_note="highlight insert",
+                    )
+                )
+                alternate_index += 1
+
+        while alternate_index < len(selected_alternates) and len(selected) < max_steps and self._remix_duration(selected) < min_target_duration:
+            selected.append(
+                self._prepare_best_of_remix_item(
+                    selected_alternates[alternate_index],
+                    source_note="highlight insert",
+                )
+            )
+            alternate_index += 1
+
+        image_seconds = 0.0
+        for item in winner_images:
+            if len(selected) >= max_steps or image_seconds >= max_image_seconds or self._remix_duration(selected) >= min_target_duration:
+                break
+            duration = min(self._best_of_remix_highlight_duration(item), max_image_seconds - image_seconds)
+            if duration < 0.5:
+                continue
+            selected.append(
+                self._prepare_best_of_remix_item(
+                    item,
+                    source_note="brief memory still",
+                    duration_seconds=duration,
+                )
+            )
+            image_seconds += duration
+
+        if self._remix_duration(selected) < min_target_duration:
+            for item in deduped:
+                if len(selected) >= max_steps:
+                    break
+                if item in selected or str(item["step"].get("media_kind") or "") != "video":
+                    continue
+                if any(self._remix_steps_overlap(item["step"], existing["step"], threshold=0.5) for existing in selected):
+                    continue
+                if self._remix_duration(selected) >= min_target_duration:
+                    break
+                selected.append(self._prepare_best_of_remix_item(item, source_note="tempo filler"))
+
+        return selected[:max_steps]
+
+    @staticmethod
+    def _remix_duration(items: list[dict[str, Any]]) -> float:
+        return sum(float(item.get("duration_seconds") or 0.0) for item in items)
+
+    def _step_duration_seconds(self, step: dict[str, Any]) -> float:
+        if str(step.get("media_kind") or "") == "video":
+            clip_start = self._to_float(step.get("clip_start_seconds"))
+            clip_end = self._to_float(step.get("clip_end_seconds"))
+            if clip_start is not None and clip_end is not None and clip_end > clip_start:
+                return round(clip_end - clip_start, 1)
+        return round(max(0.0, self._to_float(step.get("suggested_duration_seconds")) or 0.0), 1)
+
+    def _prepare_best_of_remix_item(
+        self,
+        item: dict[str, Any],
+        *,
+        source_note: str,
+        duration_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        duration = duration_seconds if duration_seconds is not None else self._best_of_remix_highlight_duration(item)
+        return {
+            **item,
+            "duration_seconds": round(duration, 1),
+            "center_trim": True,
+            "source_note": source_note,
+        }
+
+    def _best_of_remix_highlight_duration(self, item: dict[str, Any]) -> float:
+        step = item["step"]
+        original_duration = max(0.5, float(item.get("duration_seconds") or self._step_duration_seconds(step)))
+        if str(step.get("media_kind") or "") == "image":
+            return min(original_duration, 2.0)
+
+        role = str(step.get("role") or "").lower()
+        if self._is_proxy_detail_step(step):
+            cap = 6.8
+        elif "hook" in role:
+            cap = 7.2
+        elif "closer" in role or "final" in role:
+            cap = 6.4
+        else:
+            cap = 6.2
+        return max(2.5, min(original_duration, cap))
+
+    @staticmethod
+    def _is_proxy_detail_step(step: dict[str, Any]) -> bool:
+        role = str(step.get("role") or "").strip().lower()
+        source_role = str(step.get("source_role") or "").strip().lower()
+        return role == "discovered detail" or source_role == "proxy_detail_video"
+
+    def _score_best_of_remix_step(
+        self,
+        step: dict[str, Any],
+        candidate: dict[str, Any],
+        *,
+        variant_score: float,
+        is_winner_candidate: bool,
+        index: int,
+        total_steps: int,
+    ) -> float:
+        media_kind = str(step.get("media_kind") or "")
+        role = str(step.get("role") or "").lower()
+        source_role = str(step.get("source_role") or "").lower()
+        source = str(candidate.get("source") or "")
+        label = str(candidate.get("label") or "")
+        score = variant_score * 0.72
+
+        if is_winner_candidate:
+            score += 8.0
+        if media_kind == "video":
+            score += 12.0
+        else:
+            score -= 10.0
+        if source == "proxy" and ("discovered detail" in role or source_role == "proxy_detail_video"):
+            score += 17.0
+        if source == "standard" and (index == 0 or "opening" in role or "hook" in role):
+            score += 7.0
+        if index == total_steps - 1 or "closing" in role or "final" in role:
+            score += 5.0
+        if "scenic" in label.lower() and ("scenic" in role or "reveal" in role):
+            score += 4.0
+        return round(score, 3)
+
+    @staticmethod
+    def _best_of_remix_sequence_group(step: dict[str, Any], index: int, total_steps: int) -> int:
+        role = str(step.get("role") or "").lower()
+        if index == 0 or "opening" in role or "hook" in role:
+            return 0
+        if index == total_steps - 1 or "closing" in role or "final" in role or "ending" in role:
+            return 2
+        return 1
+
+    def _pick_best_sequence_item(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        sequence_group: int,
+        winner_key: tuple[str, str],
+    ) -> dict[str, Any] | None:
+        matches = [item for item in items if int(item.get("sequence_group") or 1) == sequence_group]
+        if not matches:
+            return None
+        return max(
+            matches,
+            key=lambda item: (
+                float(item.get("score") or 0.0),
+                item.get("candidate_key") == winner_key,
+                str(item.get("step", {}).get("media_kind") or "") == "video",
+            ),
+        )
+
+    def _remix_steps_overlap(self, left: dict[str, Any], right: dict[str, Any], *, threshold: float) -> bool:
+        left_media_id = str(left.get("media_id") or "")
+        right_media_id = str(right.get("media_id") or "")
+        if not left_media_id or left_media_id != right_media_id:
+            return False
+
+        if str(left.get("media_kind") or "") != "video" or str(right.get("media_kind") or "") != "video":
+            return True
+
+        left_start = self._to_float(left.get("clip_start_seconds"))
+        left_end = self._to_float(left.get("clip_end_seconds"))
+        right_start = self._to_float(right.get("clip_start_seconds"))
+        right_end = self._to_float(right.get("clip_end_seconds"))
+        if left_start is None or left_end is None or right_start is None or right_end is None:
+            return True
+        overlap = max(0.0, min(left_end, right_end) - max(left_start, right_start))
+        shortest = max(0.1, min(left_end - left_start, right_end - right_start))
+        return (overlap / shortest) >= threshold
+
+    @staticmethod
+    def _remix_step_sort_value(item: dict[str, Any]) -> tuple[int, float, int]:
+        step = item.get("step", {})
+        clip_start = step.get("clip_start_seconds")
+        if isinstance(clip_start, (int, float)):
+            return (0, float(clip_start), int(item.get("index") or 0))
+        return (1, float(item.get("score") or 0.0) * -1.0, int(item.get("index") or 0))
+
+    def _build_best_of_remix_step_payload(self, item: dict[str, Any]) -> dict[str, Any]:
+        step = item["step"]
+        candidate = item["candidate"]
+        duration = round(max(0.5, float(item.get("duration_seconds") or self._step_duration_seconds(step))), 1)
+        media_kind = str(step.get("media_kind") or "")
+        clip_start = self._to_float(step.get("clip_start_seconds"))
+        clip_end = self._to_float(step.get("clip_end_seconds"))
+        if media_kind == "video" and clip_start is not None:
+            role = str(step.get("role") or "").lower()
+            original_end = clip_end if clip_end is not None and clip_end > clip_start else clip_start + duration
+            original_duration = max(0.5, original_end - clip_start)
+            if item.get("center_trim") and duration < original_duration and "hook" not in role:
+                midpoint = clip_start + (original_duration / 2)
+                clip_start = round(max(0.0, midpoint - (duration / 2)), 1)
+            clip_end = round(clip_start + max(0.5, duration), 1)
+
+        label = str(candidate.get("label") or candidate.get("variant_id") or "variant").strip()
+        source = str(candidate.get("source") or "variant").strip()
+        original_why = str(step.get("why") or "").strip()
+        source_note = str(item.get("source_note") or "selected cut").strip()
+        why = f"Best-of mix {source_note} from {source} {label}."
+        if original_why:
+            why = f"{why} {original_why}"
+
+        return {
+            "role": str(step.get("role") or "Best-of beat").strip()[:60],
+            "media_id": step.get("media_id"),
+            "source_role": str(step.get("source_role") or ("best_mix_video" if media_kind == "video" else "best_mix_image")).strip()[:60],
+            "suggested_duration_seconds": duration,
+            "clip_start_seconds": clip_start,
+            "clip_end_seconds": clip_end,
+            "frame_mode": step.get("frame_mode"),
+            "focus_x_percent": step.get("focus_x_percent"),
+            "focus_y_percent": step.get("focus_y_percent"),
+            "edit_instruction": str(step.get("edit_instruction") or "Use this as one selected best-of reel beat.").strip()[:300],
+            "why": why[:500],
+        }
+
+    @staticmethod
+    def _summarize_best_of_remix_sources(selected_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        summaries: dict[tuple[str, str], dict[str, Any]] = {}
+        for item in selected_items:
+            candidate = item["candidate"]
+            key = (str(candidate.get("source") or ""), str(candidate.get("variant_id") or ""))
+            summary = summaries.setdefault(
+                key,
+                {
+                    "source": key[0],
+                    "variant_id": key[1],
+                    "label": str(candidate.get("label") or key[1]),
+                    "creative_angle": str(candidate.get("creative_angle") or ""),
+                    "step_count": 0,
+                    "seconds": 0.0,
+                },
+            )
+            summary["step_count"] += 1
+            summary["seconds"] = round(float(summary["seconds"]) + float(item.get("duration_seconds") or 0.0), 1)
+        return list(summaries.values())
+
     def _generate_best_reel_pick_with_ai(self, album: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
-        if not self.gemini_client or not types:
+        if not self._feature_prefers_gemini(self.best_pick_ai_model) or not self.gemini_client or not types:
             return None
 
         candidate_summaries = [
@@ -445,7 +1169,7 @@ class AlbumSuggestionService:
             ],
             "should_build_remix": False,
             "remix_reason": (
-                "Do not auto-build a best-of remix yet. The current winner is strong enough; keep remixing as a later explicit action."
+                "Use Build best mix only when you want a new rendered remix; the best pick itself stays focused on choosing an existing reel."
             ),
         }
         return self._normalize_best_pick_payload(
@@ -546,7 +1270,7 @@ class AlbumSuggestionService:
                 "should_build": bool(payload.get("should_build_remix")) and False,
                 "reason": str(
                     payload.get("remix_reason")
-                    or "Keep the best-of remix as an explicit future action after the pick layer proves useful."
+                    or "Use Build best mix when you want a new rendered remix from the strongest candidate cuts."
                 ).strip(),
             },
         }

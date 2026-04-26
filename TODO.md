@@ -98,6 +98,14 @@
   - returns a best story pick, an IG-safe pick, ranked reasons, and a remix guardrail
   - can use multimodal contact sheets when Gemini is available, otherwise falls back to transparent heuristics
   - intentionally does not auto-build a new best-of remix yet; loading the winning draft into the editor is the safer next action
+- [x] Add the first explicit `Best-of Remix` action beside `AI Best Pick`:
+  - do not keyframe/analyze every rendered reel frame-by-frame; reuse the structured draft steps, existing heavy keyframes/contact sheets, and rendered-variant pick scores
+  - backend now builds a highlight pool from standard + proxy-hybrid variant cuts, dedupes overlapping source windows, renders the mixed reel, and saves it as the album final render
+  - web UI now exposes `Build best mix` beside `Pick best reel`; the Best Pick panel now shows a visible `Rendered Best Mix` preview/download card when a best-of mix MP4 exists
+  - `AI Best Pick` now supports a focused winner view so the UI can hide the other compare reels and avoid duplicate Best Story / IG Safe preview videos when both picks are the same
+  - `petar2` mix feedback showed the first remix was too static because it globally sorted long 11.5s clips; the v2 mix now uses the AI Best Pick winner as the skeleton, inserts only a few non-overlapping highlights, caps video beats around 6-7s, center-trims around key moments, and drops stills when enough video exists
+  - AI feature/model routing is now centralized in `services/api/app/core/ai_feature_models.py`; `REEL VARIANT MIX` defaults to the GPT-5-family alias `gpt54` and falls back to Gemini/4o or deterministic remixing when unavailable
+  - future product shape should likely make this a credit/pro action for heavy albums, with a clearer "why these beats were chosen" UI
 - [x] Add cleanup for orphaned/local render folders:
   - album deletion now clears standard and proxy rendered variant folders, not only final rendered reels
   - sidebar has a confirmed `Clear render cache` action that removes `storage/local/renders` while keeping uploaded media

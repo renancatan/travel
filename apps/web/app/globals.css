@@ -782,6 +782,16 @@ button {
   grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
 }
 
+.best-mix-render-card {
+  display: grid;
+  gap: 14px;
+  border: 1px solid rgba(45, 125, 125, 0.3);
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(235, 248, 246, 0.86), rgba(255, 255, 255, 0.82));
+  margin: 16px 0;
+  padding: 16px;
+}
+
 .best-pick-winner,
 .best-pick-side,
 .best-pick-rankings {

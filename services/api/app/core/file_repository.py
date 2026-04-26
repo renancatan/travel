@@ -114,6 +114,7 @@ class FileRepository:
         cached_suggestion: dict[str, Any] | None,
         *,
         invalidate_rendered_reel: bool = False,
+        invalidate_best_pick: bool = True,
         suggestion_key: str = "cached_suggestion",
     ) -> dict[str, Any] | None:
         album = self.get_album(album_id)
@@ -131,7 +132,8 @@ class FileRepository:
         if invalidate_rendered_reel:
             self._clear_rendered_reel_files(album)
         album[normalized_suggestion_key] = cached_suggestion
-        album["best_reel_pick"] = None
+        if invalidate_best_pick:
+            album["best_reel_pick"] = None
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album

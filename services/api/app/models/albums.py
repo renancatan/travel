@@ -252,6 +252,21 @@ class AlbumResponse(BaseModel):
     media_items: list[MediaItemResponse]
 
 
+class BestOfReelRemixResponse(BaseModel):
+    album: AlbumResponse
+    reel_draft: dict
+    rendered_reel: RenderedReelResponse
+    source_summary: list[dict]
+    generated_at: str
+    analysis_mode: str
+    ai_feature: dict | None = None
+    model_resolution: dict | None = None
+    target_duration_seconds: float
+    video_seconds: float
+    image_seconds: float
+    reason: str
+
+
 class UploadMediaResponse(BaseModel):
     album: AlbumResponse
     media_item: MediaItemResponse

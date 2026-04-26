@@ -264,6 +264,7 @@ class MultiProviderRouter:
             "gpt4o": "gpt4",
             "4o": "gpt4",
             "gpt5": "gpt5",
+            "gpt54": "gpt5",
             "gpt54nano": "gpt5",
             "gpt5nano": "gpt5",
             "nano": "gpt5",

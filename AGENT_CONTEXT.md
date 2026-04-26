@@ -306,6 +306,21 @@ Implemented in `apps/web`:
   - backend stores `best_reel_pick` on the album and invalidates it when suggestions/renders change
   - `POST /albums/{album_id}/best-pick` can use rendered contact sheets with Gemini when available, otherwise falls back to transparent scoring
   - UI shows the winner, IG-safe pick, ranking reasons, and can load the winner draft into the editor; remix generation remains intentionally disabled until the pick layer proves itself
+- 2026-04-25 remix product note:
+  - user originally imagined an actual best-of remix that borrows cuts from all generated versions, not only an AI pick/ranking layer
+  - recommended path is an explicit later action that uses existing structured draft cut windows plus stored heavy keyframes/contact sheets, not full frame-by-frame analysis of all rendered MP4s
+  - the remix should render once from original media/proxies after deduping/scoring source windows; cutting from rendered reels should be avoided to reduce quality loss and awkward edit boundaries
+- 2026-04-25 first `Best-of Remix` implementation:
+  - added `POST /albums/{album_id}/best-remix`, which uses an existing best-pick when present or a cheap heuristic ranking when not, scores candidate draft steps, dedupes overlapping source windows, renders the mixed reel, and saves it as the album final render
+  - added web `Build best mix` button beside `Pick best reel`; the Best Pick panel now displays a `Rendered Best Mix` preview/download card whenever the saved final render is a best-of mix
+  - current remix is heuristic/draft-based, not frame-by-frame AI analysis; this keeps cost low and reuses standard/proxy generated cut metadata
+  - `AI Best Pick` now has a focused winner mode so the UI can hide non-winning compare reels and avoid showing duplicate Best Story / IG Safe video previews when both are the same reel
+  - user did not like the first `petar2` mix because it overvalued static/long scenes; changed the mix strategy to winner-skeleton-plus-inserts with 6-7s caps, centered video trims around key moments, and no stills when video can carry the reel
+- 2026-04-26 AI model routing cleanup:
+  - AI feature/model choices are centralized in `services/api/app/core/ai_feature_models.py` so business-level decisions like `REEL VARIANT MIX -> gpt54` are visible and easy to change
+  - `reel_variant_mix` now asks the configured model for an ordered cut plan from existing candidate draft windows before rendering, then falls back to the deterministic winner-skeleton heuristic if GPT/Gemini credentials, quota, or network are unavailable
+  - `gpt54` normalizes to the existing Azure GPT-5-family route; to test GPT-5.4, point `AZURE_OPENAI_GPT5_DEPLOYMENT` at the GPT-5.4 deployment and keep the feature alias as `gpt54` or `gpt5`
+  - `/runtime` exposes the current AI feature model map so the UI/dev shell can inspect which macro feature is assigned to which model
 
 ### Confirmed working
 

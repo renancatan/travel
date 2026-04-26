@@ -1,6 +1,6 @@
 # Business Decisions
 
-Last updated: 2026-04-25
+Last updated: 2026-04-26
 
 This file captures product, pricing, retention, and cost-control decisions that should guide implementation. It is intentionally separate from engineering architecture so business rules do not get buried inside code.
 
@@ -149,6 +149,9 @@ Current implementation note:
 - likely monetization surface is heavy indexing plus extra variants/exports, detail-discovery packs, 4K/high-bitrate processing, credits, and optional original archive retention; durable storage of heavy originals should be opt-in
 - local cleanup is part of the heavy-video product safety story: generated render folders can be cleared independently from uploaded originals, and album deletion must remove rendered variants as well as final reels
 - `AI Best Pick` should be a pick layer before it becomes a remix layer: compare existing rendered standard/proxy variants, name the best story pick and IG-safe pick, and only recommend a best-of remix later if the winner still has obvious gaps
+- `Best-of Remix` should be a deliberate action, not automatic: reuse draft metadata, heavy keyframes, contact sheets, and pick scores to assemble source cut windows, then render once from original media/proxies instead of analyzing or recutting all rendered MP4s frame-by-frame. The first local version is heuristic/draft-based, renders the mixed MP4, saves it as the album final render, and loads the mixed draft into the editor; future production packaging can make this a premium/credit feature for heavy albums.
+- Remix quality should be constrained by the winner, not by novelty: the current direction is "AI Best Pick winner as skeleton, then punchy highlight inserts" rather than a globally sorted bag of high-ranked clips. Long underwater clips should be capped and center-trimmed around the actual key moment so static texture does not dominate.
+- AI model choice is now a business-level configuration, not hidden implementation trivia: `services/api/app/core/ai_feature_models.py` maps macro features such as `REEL VARIANT MIX` to aliases like `gpt54`, and the best-of mix can ask that configured model for a cut plan before falling back to deterministic remixing.
 
 ## Telemetry Before Final Pricing
 

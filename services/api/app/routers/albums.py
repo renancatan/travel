@@ -22,6 +22,7 @@ from services.api.app.core.reel_frame_gallery import ReelFrameGalleryError, Reel
 from services.api.app.core.reel_renderer import ReelRenderError, ReelRenderer
 from services.api.app.models.albums import (
     AlbumResponse,
+    BestOfReelRemixResponse,
     MediaItemResponse,
     UploadAnalysisFramesRequest,
     CreateAlbumRequest,
@@ -559,6 +560,42 @@ def generate_album_best_reel_pick(album_id: str) -> dict:
     if updated_album is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
     return updated_album
+
+
+@router.post("/{album_id}/best-remix", response_model=BestOfReelRemixResponse)
+def generate_album_best_of_reel_remix(album_id: str) -> dict:
+    album = repository.refresh_album_media_metadata(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    try:
+        remix = suggestion_service.generate_best_of_reel_remix(album)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    cached_suggestion = _get_renderable_cached_suggestion(album_id, album)
+    cached_suggestion["reel_draft"] = remix["reel_draft"]
+    album = repository.save_cached_suggestion(
+        album_id,
+        cached_suggestion,
+        invalidate_best_pick=False,
+    ) or album
+
+    try:
+        rendered_reel = reel_renderer.render_draft(remix["reel_draft"])
+    except ReelRenderError as exc:
+        logger.warning("Best-of remix render failed album_id=%s reason=%s", album_id, str(exc))
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    updated_album = repository.save_rendered_reel(album_id, rendered_reel)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    return {
+        "album": updated_album,
+        "rendered_reel": rendered_reel,
+        **remix,
+    }
 
 
 @router.post("/{album_id}/reel-draft", response_model=AlbumResponse)

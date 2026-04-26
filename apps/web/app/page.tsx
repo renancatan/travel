@@ -343,6 +343,28 @@ type BestReelPick = {
   };
 };
 
+type BestOfReelRemixResponse = {
+  album: Album;
+  reel_draft: ReelDraft;
+  rendered_reel: RenderedReel;
+  source_summary: Array<{
+    source: string;
+    variant_id: string;
+    label: string;
+    creative_angle: string;
+    step_count: number;
+    seconds: number;
+  }>;
+  generated_at: string;
+  analysis_mode: string;
+  ai_feature?: Record<string, string>;
+  model_resolution?: Record<string, unknown> | null;
+  target_duration_seconds: number;
+  video_seconds: number;
+  image_seconds: number;
+  reason: string;
+};
+
 type ReelFrameGalleryFrame = {
   frame_id: string;
   frame_number: number;
@@ -1450,6 +1472,8 @@ export default function Page() {
   const [isRenderingVariantSet, setIsRenderingVariantSet] = useState(false);
   const [isRenderingProxyVariantSet, setIsRenderingProxyVariantSet] = useState(false);
   const [isGeneratingBestPick, setIsGeneratingBestPick] = useState(false);
+  const [isGeneratingBestOfRemix, setIsGeneratingBestOfRemix] = useState(false);
+  const [isBestPickFocusMode, setIsBestPickFocusMode] = useState(false);
   const [isReelFrameGalleryOpen, setIsReelFrameGalleryOpen] = useState(false);
   const [isLoadingReelFrameGallery, setIsLoadingReelFrameGallery] = useState(false);
   const [reelFrameGallery, setReelFrameGallery] = useState<ReelFrameGallery | null>(null);
@@ -1491,6 +1515,24 @@ export default function Page() {
   const renderedVariantRenders = activeSuggestions?.rendered_variant_renders ?? [];
   const renderedProxyVariantRenders = activeProxySuggestions?.rendered_variant_renders ?? [];
   const hasRenderedCompareReels = renderedVariantRenders.length > 0 || renderedProxyVariantRenders.length > 0;
+  const focusedBestPickWinner = isBestPickFocusMode ? bestReelPick?.winner ?? null : null;
+  const displayedSuggestedReelVariants = focusedBestPickWinner
+    ? focusedBestPickWinner.source === "standard"
+      ? suggestedReelVariants.filter((variant) => variant.variant_id === focusedBestPickWinner.variant_id)
+      : []
+    : suggestedReelVariants;
+  const displayedProxySuggestedReelVariants = focusedBestPickWinner
+    ? focusedBestPickWinner.source === "proxy"
+      ? proxySuggestedReelVariants.filter((variant) => variant.variant_id === focusedBestPickWinner.variant_id)
+      : []
+    : proxySuggestedReelVariants;
+  const showStandardVariantPanel = !focusedBestPickWinner || displayedSuggestedReelVariants.length > 0;
+  const showProxyVariantPanel = Boolean(activeProxySuggestions && (!focusedBestPickWinner || displayedProxySuggestedReelVariants.length > 0));
+  const isBestPickWinnerSameAsIgSafe = Boolean(
+    bestReelPick &&
+      bestReelPick.winner.source === bestReelPick.ig_safe_pick.source &&
+      bestReelPick.winner.variant_id === bestReelPick.ig_safe_pick.variant_id,
+  );
   const bestPickWinnerPreviewUrl = getBestPickRenderedUrl(workflowAlbum, bestReelPick?.winner ?? null);
   const bestPickIgSafePreviewUrl = getBestPickRenderedUrl(workflowAlbum, bestReelPick?.ig_safe_pick ?? null);
   const savedReelDraftVersions = activeSuggestions?.reel_draft_versions ?? [];
@@ -1500,7 +1542,10 @@ export default function Page() {
   const workingReelDraft =
     isVariantChoiceRequired && !selectedEditorVariantId ? null : editableReelDraft ?? activeSuggestions?.reel_draft ?? null;
   const selectedEditorVariant =
-    selectedEditorVariantId && selectedEditorVariantId !== "__saved_version__" && selectedEditorVariantId !== "__best_pick__"
+    selectedEditorVariantId &&
+    selectedEditorVariantId !== "__saved_version__" &&
+    selectedEditorVariantId !== "__best_pick__" &&
+    selectedEditorVariantId !== "__best_of_remix__"
       ? suggestedReelVariants.find((variant) => variant.variant_id === selectedEditorVariantId) ?? null
       : null;
   const isReelDraftDirty = Boolean(
@@ -3559,6 +3604,7 @@ export default function Page() {
       const updatedAlbum = (await response.json()) as Album;
       syncAlbumStateFromApi(updatedAlbum);
       const winner = updatedAlbum.best_reel_pick?.winner;
+      setIsBestPickFocusMode(Boolean(winner));
       setSuggestionStatus({
         tone: "ok",
         message: winner
@@ -3572,6 +3618,62 @@ export default function Page() {
       });
     } finally {
       setIsGeneratingBestPick(false);
+    }
+  }
+
+  async function handleGenerateBestOfReelRemix() {
+    if (!workflowAlbum) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Choose an album first. There are no rendered reels to remix yet.",
+      });
+      return;
+    }
+
+    if (!hasRenderedCompareReels) {
+      setSuggestionStatus({
+        tone: "error",
+        message: "Render standard or hybrid compare reels first so the mix can borrow real candidate cuts.",
+      });
+      return;
+    }
+
+    setIsGeneratingBestOfRemix(true);
+    setSuggestionStatus({
+      tone: "idle",
+      message: "Building and rendering a best-of mix from the strongest scenes...",
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/best-remix`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        const detail = (await response.json().catch(() => null)) as { detail?: string } | null;
+        throw new Error(detail?.detail ?? `Best mix failed (${response.status})`);
+      }
+
+      const data = (await response.json()) as BestOfReelRemixResponse;
+      syncAlbumStateFromApi(data.album);
+      setEditableReelDraft(cloneReelDraft(data.reel_draft));
+      setSelectedEditorVariantId("__best_of_remix__");
+      setIsBestPickFocusMode(false);
+      setReelFrameGallery(null);
+      setLoadedReelFrameGallerySignature("");
+      setSuggestionStatus({
+        tone: "ok",
+        message: `Best mix rendered and loaded: ${formatDuration(data.video_seconds)} video / ${formatDuration(
+          data.image_seconds,
+        )} images across ${data.reel_draft.steps.length} beat(s).`,
+      });
+    } catch (error) {
+      setSuggestionStatus({
+        tone: "error",
+        message: error instanceof Error ? error.message : "Best mix failed.",
+      });
+    } finally {
+      setIsGeneratingBestOfRemix(false);
     }
   }
 
@@ -3943,7 +4045,11 @@ export default function Page() {
     setReelFrameGalleryError(null);
 
     const sourceVariantId =
-      selectedEditorVariantId && selectedEditorVariantId !== "__saved_version__" ? selectedEditorVariantId : null;
+      selectedEditorVariantId &&
+      selectedEditorVariantId !== "__saved_version__" &&
+      selectedEditorVariantId !== "__best_of_remix__"
+        ? selectedEditorVariantId
+        : null;
 
     try {
       const response = await fetch(`${API_BASE_URL}/albums/${workflowAlbum.id}/reel-frame-gallery`, {
@@ -4049,6 +4155,9 @@ export default function Page() {
   }
 
   const renderedReelContentUrl = getRenderedReelContentUrl(workflowAlbum);
+  const bestMixRenderedReel =
+    workflowAlbum?.rendered_reel?.draft_name.includes("best-of-mix") ? workflowAlbum.rendered_reel : null;
+  const bestMixPreviewUrl = bestMixRenderedReel ? renderedReelContentUrl : null;
   const selectedRenderedVariant =
     selectedEditorVariant
       ? renderedVariantRenders.find((item) => item.variant_id === selectedEditorVariant.variant_id) ?? null
@@ -4805,17 +4914,20 @@ export default function Page() {
                           <p>No reel plan yet.</p>
                         )}
                       </div>
+                      {showStandardVariantPanel ? (
                       <div className="ai-card ai-card-wide">
                         <div className="reel-plan-header">
                           <div>
                             <strong>{suggestedReelVariants.length > 1 ? "AI reel variants" : "AI reel suggestion"}</strong>
                             <p>
-                              {suggestedReelVariants.length > 1
+                              {focusedBestPickWinner
+                                ? "Showing only the AI Best Pick winner. Use Show all reels to restore the full compare grid."
+                                : suggestedReelVariants.length > 1
                                 ? "Render the AI variants first, compare the actual reels, then choose one to unlock manual editing."
                                 : "Render the AI reel suggestion first, then choose it to unlock manual editing."}
                             </p>
                           </div>
-                          {suggestedReelVariants.length > 0 ? (
+                          {!focusedBestPickWinner && suggestedReelVariants.length > 0 ? (
                             <div className="actions">
                               <button
                                 className="button-secondary"
@@ -4832,9 +4944,9 @@ export default function Page() {
                             </div>
                           ) : null}
                         </div>
-                        {suggestedReelVariants.length > 0 ? (
+                        {displayedSuggestedReelVariants.length > 0 ? (
                           <div className="candidate-list">
-                            {suggestedReelVariants.map((variant) => {
+                            {displayedSuggestedReelVariants.map((variant) => {
                               const matchesEditor = selectedEditorVariantId === variant.variant_id;
                               const renderedVariant = renderedVariantRenders.find((item) => item.variant_id === variant.variant_id);
                               const renderedVariantUrl = getRenderedVariantContentUrl(workflowAlbum, renderedVariant ?? null);
@@ -5070,17 +5182,19 @@ export default function Page() {
                           <p>No AI reel variants yet.</p>
                         )}
                       </div>
-                      {activeProxySuggestions ? (
+                      ) : null}
+                      {showProxyVariantPanel ? (
                         <div className="ai-card ai-card-wide proxy-compare-card">
                           <div className="reel-plan-header">
                             <div>
                               <strong>Hybrid proxy reel variants</strong>
                               <p>
-                                Standard story structure with proxy-discovered detail beats. Analysis mode:{" "}
-                                {activeProxySuggestions.analysis_mode}.
+                                {focusedBestPickWinner
+                                  ? "Showing only the AI Best Pick winner. Use Show all reels to restore the full compare grid."
+                                  : `Standard story structure with proxy-discovered detail beats. Analysis mode: ${activeProxySuggestions?.analysis_mode}.`}
                               </p>
                             </div>
-                            {proxySuggestedReelVariants.length > 0 ? (
+                            {!focusedBestPickWinner && proxySuggestedReelVariants.length > 0 ? (
                               <div className="actions">
                                 <button
                                   className="button-secondary"
@@ -5097,9 +5211,9 @@ export default function Page() {
                               </div>
                             ) : null}
                           </div>
-                          {proxySuggestedReelVariants.length > 0 ? (
+                          {displayedProxySuggestedReelVariants.length > 0 ? (
                             <div className="candidate-list">
-                              {proxySuggestedReelVariants.map((variant) => {
+                              {displayedProxySuggestedReelVariants.map((variant) => {
                                 const renderedVariant = renderedProxyVariantRenders.find(
                                   (item) => item.variant_id === variant.variant_id,
                                 );
@@ -5160,14 +5274,14 @@ export default function Page() {
                           <div>
                             <strong>AI Best Pick</strong>
                             <p>
-                              Compare rendered standard and hybrid reels, then pick the best existing version before we
-                              try any best-of remixing.
+                              Compare rendered standard and hybrid reels, then either pick the best existing version or
+                              render a best-of mix from their strongest cuts.
                             </p>
                           </div>
                           <div className="actions">
                             <button
                               className="button-secondary"
-                              disabled={!hasRenderedCompareReels || isGeneratingBestPick}
+                              disabled={!hasRenderedCompareReels || isGeneratingBestPick || isGeneratingBestOfRemix}
                               onClick={() => void handleGenerateBestReelPick()}
                               type="button"
                             >
@@ -5177,8 +5291,57 @@ export default function Page() {
                                   ? "Refresh best pick"
                                   : "Pick best reel"}
                             </button>
+                            <button
+                              className="button-secondary"
+                              disabled={!hasRenderedCompareReels || isGeneratingBestPick || isGeneratingBestOfRemix}
+                              onClick={() => void handleGenerateBestOfReelRemix()}
+                              type="button"
+                            >
+                              {isGeneratingBestOfRemix ? "Mixing..." : "Build best mix"}
+                            </button>
+                            {bestReelPick ? (
+                              <button
+                                className="button-secondary"
+                                disabled={isGeneratingBestPick || isGeneratingBestOfRemix}
+                                onClick={() => setIsBestPickFocusMode((current) => !current)}
+                                type="button"
+                              >
+                                {isBestPickFocusMode ? "Show all reels" : "Focus winner"}
+                              </button>
+                            ) : null}
                           </div>
                         </div>
+                        {bestMixRenderedReel && bestMixPreviewUrl ? (
+                          <div className="best-mix-render-card">
+                            <div className="reel-plan-header">
+                              <div>
+                                <span className="best-pick-kicker">Rendered Best Mix</span>
+                                <strong>{bestMixRenderedReel.draft_name}</strong>
+                                <p>
+                                  Ready at {formatDate(bestMixRenderedReel.rendered_at)} •{" "}
+                                  {bestMixRenderedReel.output_width}x{bestMixRenderedReel.output_height} •{" "}
+                                  {bestMixRenderedReel.fps} fps •{" "}
+                                  {formatDuration(bestMixRenderedReel.estimated_total_duration_seconds)} •{" "}
+                                  {formatBytes(bestMixRenderedReel.file_size_bytes)}
+                                </p>
+                              </div>
+                              <div className="actions">
+                                <button className="button-secondary button-chip" onClick={handleDownloadRenderedReel} type="button">
+                                  Download mix
+                                </button>
+                              </div>
+                            </div>
+                            <div className="render-preview variant-render-preview">
+                              <video
+                                key={bestMixPreviewUrl}
+                                controls
+                                preload="metadata"
+                                src={bestMixPreviewUrl}
+                                style={{ filter: buildCssFilter(workingReelDraft?.filter_settings) }}
+                              />
+                            </div>
+                          </div>
+                        ) : null}
                         {!hasRenderedCompareReels ? (
                           <p>Render standard or hybrid compare reels first so the pick can judge real outputs.</p>
                         ) : bestReelPick ? (
@@ -5202,7 +5365,7 @@ export default function Page() {
                                   Load winner in editor
                                 </button>
                               </div>
-                              {bestPickWinnerPreviewUrl ? (
+                              {bestPickWinnerPreviewUrl && !focusedBestPickWinner ? (
                                 <div className="render-preview variant-render-preview">
                                   <video controls preload="metadata" src={bestPickWinnerPreviewUrl} />
                                 </div>
@@ -5211,8 +5374,12 @@ export default function Page() {
                             <div className="best-pick-side">
                               <span className="best-pick-kicker">{bestReelPick.ig_safe_pick.pick_label}</span>
                               <strong>{bestReelPick.ig_safe_pick.label}</strong>
-                              <p>{bestReelPick.ig_safe_pick.reason}</p>
-                              {bestPickIgSafePreviewUrl ? (
+                              <p>
+                                {isBestPickWinnerSameAsIgSafe
+                                  ? "Same reel as the Best Story pick. No duplicate preview shown."
+                                  : bestReelPick.ig_safe_pick.reason}
+                              </p>
+                              {bestPickIgSafePreviewUrl && !isBestPickWinnerSameAsIgSafe && !focusedBestPickWinner ? (
                                 <div className="render-preview variant-render-preview">
                                   <video controls preload="metadata" src={bestPickIgSafePreviewUrl} />
                                 </div>

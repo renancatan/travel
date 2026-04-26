@@ -4,9 +4,11 @@ from dataclasses import dataclass
 from functools import lru_cache
 import os
 
+from services.api.app.core.ai_feature_models import get_ai_feature_model
 
-# Change this one value if you want the dedicated map AI flow to use a different model route.
-DEFAULT_MAP_AI_MODEL_ALIAS = "gpt4o"
+# Change the default map route in ai_feature_models.py. Keep this env override
+# for local experiments that should not touch the business config file.
+DEFAULT_MAP_AI_MODEL_ALIAS = str(get_ai_feature_model("map_entry")["model_alias"])
 
 
 @dataclass(frozen=True)

@@ -5,6 +5,7 @@ import os
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from services.api.app.core.ai_feature_models import get_ai_feature_runtime_models
 from services.api.app.core.llm_router import MultiProviderRouter
 from services.api.app.core.map_ai_settings import get_map_ai_settings
 from services.api.app.core.media_metadata import get_media_tooling_status
@@ -62,6 +63,7 @@ def runtime() -> dict[str, object]:
         },
         "reel_variant_presets": get_reel_variant_runtime_presets(),
         "reel_variant_rules": get_reel_variant_runtime_rules(),
+        "ai_feature_models": get_ai_feature_runtime_models(),
         "media_processing_rules": get_media_processing_runtime_rules(),
         "providers": {
             "gemini_configured": bool(os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")),
