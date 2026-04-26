@@ -85,13 +85,23 @@
   - `petar56` validation confirmed the proxy read now understands underwater content better, but the rendered proxy reels are still not clearly better than standard because clip-window selection is still mostly deterministic instead of semantic
   - second tuning pass now turns the proxy comparison output into `Proxy Hybrid` variants when a standard analysis exists: keep the standard reel structure and replace up to two middle video beats with ranked proxy-discovered detail windows
   - `petar1` retest after the keyframe-first change is the strongest hybrid shape so far: standard remains the better taste/story baseline, while proxy hybrid can challenge it by injecting two underwater discovered-detail beats without rebuilding the whole reel from proxy output
+  - `petar2` retest is the first case where proxy hybrid appears to beat standard for the owner/review memory: `Proxy Hybrid • Auto pick • Balanced` keeps the standard balanced arc but swaps two mid-reel beats with richer coral/fish/diver detail; standard balanced/scenic may still be more immediately IG-safe because they are simpler and less dive-documentary
   - still open: replace cheap keyframe scoring with semantic/taste-aware scoring so proxy discovers strong detail beats without overvaluing busy but repetitive underwater texture
   - likely next UX/algorithm direction: add semantic labels/scores for keyframes and maybe create a clearly labeled "Dive details" alternate
 - [ ] Define the product/value rule for heavy media:
   - classify heavy using both duration and file size, not one threshold only: `>10m`, `>500 MB`, `4K`, high bitrate, or less-portable codecs should leave the standard short path
   - keep FHD long videos keyframe/contact-sheet-first; only create a proxy when repeated renders, compatibility, 4K/high bitrate, or remote egress savings justify it
   - monetize heavy work through extra candidate variants, detail-discovery packs, 4K/high-bitrate processing, exports, credits, and optional original archive retention rather than making full proxy generation the default paid feature
-  - add cleanup for orphaned render folders as a separate local-storage safety feature; deleting albums does not currently remove all old `storage/local/renders` folders
+  - first code pass now treats `>10m`, `>500 MB`, 4K, high-bitrate, or less-portable codecs as `heavy_async`
+- [x] Add a first `AI Best Pick` layer for rendered reels:
+  - compares rendered standard and proxy-hybrid variants after the user renders compare reels
+  - returns a best story pick, an IG-safe pick, ranked reasons, and a remix guardrail
+  - can use multimodal contact sheets when Gemini is available, otherwise falls back to transparent heuristics
+  - intentionally does not auto-build a new best-of remix yet; loading the winning draft into the editor is the safer next action
+- [x] Add cleanup for orphaned/local render folders:
+  - album deletion now clears standard and proxy rendered variant folders, not only final rendered reels
+  - sidebar has a confirmed `Clear render cache` action that removes `storage/local/renders` while keeping uploaded media
+  - cleanup also clears rendered-output metadata from album records so stale previews do not point to deleted files
 - [ ] Move heavy media analysis off the request path:
   - background worker job
   - processing status in the UI

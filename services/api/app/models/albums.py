@@ -49,6 +49,13 @@ class UpdateAlbumRequest(BaseModel):
     description: str | None = Field(default=None, max_length=1000)
 
 
+class RenderCacheCleanupResponse(BaseModel):
+    deleted_render_directories: int
+    deleted_render_files: int
+    deleted_bytes: int
+    album_records_updated: int
+
+
 class AnalysisFrameInput(BaseModel):
     timestamp_seconds: float = Field(ge=0)
     data_url: str = Field(min_length=32)
@@ -237,6 +244,7 @@ class AlbumResponse(BaseModel):
     description_meta: dict | None = None
     cached_suggestion: dict | None = None
     proxy_cached_suggestion: dict | None = None
+    best_reel_pick: dict | None = None
     map_entry: MapEntryResponse | None = None
     rendered_reel: RenderedReelResponse | None = None
     created_at: str

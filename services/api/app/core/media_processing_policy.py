@@ -13,6 +13,7 @@ MEDIA_PROCESSING_RULES: dict[str, Any] = {
     "uhd_min_width": 3840,
     "uhd_min_height": 2160,
     "proxy_high_bitrate_bits_per_second": 40_000_000,
+    "expensive_or_less_portable_video_codecs": {"av1", "vp9", "prores", "dnxhd", "dnxhr", "rawvideo"},
 }
 
 
@@ -33,25 +34,32 @@ def classify_media_processing(media_item: dict[str, Any]) -> dict[str, Any]:
     file_size_bytes = int(_to_float(media_item.get("file_size_bytes")) or 0)
     width = int(_to_float(media_item.get("width")) or 0)
     height = int(_to_float(media_item.get("height")) or 0)
+    video_codec = str(media_item.get("video_codec") or "").strip().lower()
+    estimated_bitrate = (file_size_bytes * 8 / duration_seconds) if duration_seconds > 0 else 0.0
 
     duration_tier = _duration_tier(duration_seconds)
     resolution_tier = _resolution_tier(width, height)
     is_uhd = resolution_tier == "uhd_4k"
     is_large_file = file_size_bytes >= int(MEDIA_PROCESSING_RULES["large_file_bytes"])
     is_very_large_file = file_size_bytes >= int(MEDIA_PROCESSING_RULES["very_large_file_bytes"])
+    is_high_bitrate = estimated_bitrate >= int(MEDIA_PROCESSING_RULES["proxy_high_bitrate_bits_per_second"])
+    is_expensive_codec = video_codec in MEDIA_PROCESSING_RULES["expensive_or_less_portable_video_codecs"]
 
     if (
         duration_seconds >= float(MEDIA_PROCESSING_RULES["heavy_async_min_duration_seconds"])
+        or is_large_file
         or is_very_large_file
-        or (is_uhd and is_large_file)
+        or is_uhd
+        or is_high_bitrate
+        or is_expensive_codec
     ):
         return {
             "processing_profile": "heavy_async",
             "processing_profile_label": "Heavy video",
             "processing_recommendation": (
-                "Extract server keyframes first; create a lighter proxy only when the source size, codec, or downstream work justifies it."
+                "Use the heavy lane: extract server keyframes first, then create a lighter proxy only when source size, codec, or downstream work justifies it."
             ),
-            "analysis_strategy": "async_proxy_required",
+            "analysis_strategy": "async_heavy_required",
             "is_heavy_video": True,
             "video_duration_tier": duration_tier,
             "video_resolution_tier": resolution_tier,

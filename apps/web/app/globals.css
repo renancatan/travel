@@ -210,6 +210,28 @@ button {
   color: var(--accent);
 }
 
+.local-cleanup-panel {
+  border: 1px dashed rgba(143, 115, 74, 0.35);
+  border-radius: 18px;
+  background: rgba(255, 247, 232, 0.72);
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px;
+}
+
+.local-cleanup-panel strong {
+  color: var(--ink);
+  font-size: 13px;
+}
+
+.local-cleanup-panel p {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+}
+
 .album-button {
   width: 100%;
   text-align: left;
@@ -747,6 +769,79 @@ button {
 .proxy-render-card {
   background: rgba(235, 248, 246, 0.56);
   border-color: rgba(45, 125, 125, 0.24);
+}
+
+.best-pick-card {
+  border-color: rgba(199, 127, 55, 0.32);
+  background: linear-gradient(135deg, rgba(255, 249, 238, 0.88), rgba(238, 250, 247, 0.7));
+}
+
+.best-pick-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(260px, 0.75fr);
+}
+
+.best-pick-winner,
+.best-pick-side,
+.best-pick-rankings {
+  display: grid;
+  gap: 10px;
+  border: 1px solid rgba(143, 115, 74, 0.24);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 14px;
+}
+
+.best-pick-rankings {
+  grid-column: 1 / -1;
+}
+
+.best-pick-kicker {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.best-pick-winner > span:not(.best-pick-kicker),
+.best-pick-side > span:not(.best-pick-kicker),
+.best-pick-ranking-row span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.best-pick-winner p,
+.best-pick-side p,
+.best-pick-ranking-row p {
+  color: var(--muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.best-pick-ranking-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(143, 115, 74, 0.16);
+  padding-bottom: 10px;
+}
+
+.best-pick-ranking-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.best-pick-ranking-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.best-pick-ranking-row em {
+  color: var(--accent);
+  font-style: normal;
+  font-weight: 800;
 }
 
 .variant-render-card-header {
@@ -1680,6 +1775,7 @@ button {
   .ai-grid,
   .reel-draft-grid,
   .variant-custom-grid,
+  .best-pick-grid,
   .map-floating-meta,
   .map-filter-panel--top {
     grid-template-columns: 1fr;

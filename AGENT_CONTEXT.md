@@ -291,6 +291,21 @@ Implemented in `apps/web`:
   - product value should come from cheap indexing, candidate discovery, extra variants/exports, 4K/high-bitrate processing, and optional original retention; proxy generation itself should not be the default monetized unit
   - heavy classification should combine duration and file size signals, e.g. `>10m`, `>500 MB`, 4K, high bitrate, or incompatible/expensive codecs
   - local storage note: deleting albums does not currently clean all orphaned folders under `storage/local/renders`; old renders still need their own cleanup action
+- 2026-04-25 cleanup/classification follow-up:
+  - media policy now classifies video as `heavy_async` when it is `>10m`, `>500 MB`, 4K, high bitrate, or uses an expensive/less-portable codec
+  - the heavy analysis strategy label is now `async_heavy_required` instead of saying proxy is always required
+  - album deletion clears rendered variant folders from both standard and proxy suggestions before removing the album
+  - the web sidebar has a confirmed `Clear render cache` action that removes `storage/local/renders` and clears rendered-output metadata without deleting uploaded media
+- 2026-04-25 `petar2` quality read:
+  - user specifically liked `Proxy Hybrid • Auto pick • Balanced`
+  - contact-sheet review supports that read: proxy hybrid keeps the standard balanced opener/closer but replaces two middle generic reef/sand beats with richer discovered coral/fish/diver detail around server keyframes `09` and `11`
+  - for the owner/memory-review use case, proxy hybrid currently looks stronger than standard on this dive album
+  - for broad IG/public posting, standard balanced or standard scenic may still compete because they are simpler, cleaner, and less dive-documentary
+- 2026-04-25 `AI Best Pick` decision:
+  - implement pick-first, remix-later: AI/heuristic comparison chooses the best existing rendered reel and a separate IG-safe pick before we consider building a brand-new best-of remix
+  - backend stores `best_reel_pick` on the album and invalidates it when suggestions/renders change
+  - `POST /albums/{album_id}/best-pick` can use rendered contact sheets with Gemini when available, otherwise falls back to transparent scoring
+  - UI shows the winner, IG-safe pick, ranking reasons, and can load the winner draft into the editor; remix generation remains intentionally disabled until the pick layer proves itself
 
 ### Confirmed working
 

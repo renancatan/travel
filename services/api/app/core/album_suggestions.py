@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -252,6 +253,458 @@ class AlbumSuggestionService:
     ) -> list[dict[str, Any]]:
         versions = self._normalize_reel_draft_versions(album, existing_versions)
         return [version for version in versions if version.get("version_id") != version_id]
+
+    def generate_best_reel_pick(self, album: dict[str, Any]) -> dict[str, Any]:
+        candidates = self._build_best_pick_candidates(album)
+        if not candidates:
+            raise ValueError("Render at least one standard or hybrid reel variant before asking for a best pick.")
+
+        ai_pick = self._generate_best_reel_pick_with_ai(album, candidates)
+        if ai_pick is not None:
+            return ai_pick
+
+        return self._build_heuristic_best_reel_pick(album, candidates)
+
+    def _build_best_pick_candidates(self, album: dict[str, Any]) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        for source, suggestion_key in (
+            ("standard", "cached_suggestion"),
+            ("proxy", "proxy_cached_suggestion"),
+        ):
+            suggestion = album.get(suggestion_key)
+            if not isinstance(suggestion, dict):
+                continue
+
+            rendered_by_id = {
+                str(rendered.get("variant_id") or ""): rendered
+                for rendered in suggestion.get("rendered_variant_renders") or []
+                if isinstance(rendered, dict)
+            }
+            variants = suggestion.get("reel_draft_variants")
+            if not isinstance(variants, list) or not variants:
+                primary_draft = suggestion.get("reel_draft")
+                variants = [
+                    {
+                        "variant_id": "primary",
+                        "label": "Primary",
+                        "creative_angle": "primary reel",
+                        "target_duration_seconds": primary_draft.get("estimated_total_duration_seconds") if isinstance(primary_draft, dict) else 0,
+                        "reel_draft": primary_draft,
+                    }
+                ]
+
+            for variant in variants:
+                if not isinstance(variant, dict):
+                    continue
+                reel_draft = variant.get("reel_draft")
+                if not isinstance(reel_draft, dict):
+                    continue
+
+                variant_id = str(variant.get("variant_id") or "").strip() or f"{source}-{len(candidates) + 1}"
+                steps = [step for step in reel_draft.get("steps") or [] if isinstance(step, dict)]
+                video_seconds = sum(
+                    self._to_float(step.get("suggested_duration_seconds")) or 0.0
+                    for step in steps
+                    if str(step.get("media_kind") or "") == "video"
+                )
+                image_seconds = sum(
+                    self._to_float(step.get("suggested_duration_seconds")) or 0.0
+                    for step in steps
+                    if str(step.get("media_kind") or "") == "image"
+                )
+                discovered_detail_count = sum(
+                    1
+                    for step in steps
+                    if str(step.get("role") or "").strip().lower() == "discovered detail"
+                    or str(step.get("source_role") or "").strip().lower() == "proxy_detail_video"
+                )
+                title = str(reel_draft.get("title") or variant.get("label") or variant_id).strip()
+                label = str(variant.get("label") or variant_id).strip()
+                creative_angle = str(variant.get("creative_angle") or "").strip()
+                rendered = rendered_by_id.get(variant_id)
+                candidates.append(
+                    {
+                        "source": source,
+                        "variant_id": variant_id,
+                        "label": label,
+                        "creative_angle": creative_angle,
+                        "title": title,
+                        "reel_draft": reel_draft,
+                        "rendered_variant": rendered,
+                        "rendered_relative_path": str(rendered.get("relative_path") or "").strip() if isinstance(rendered, dict) else None,
+                        "target_duration_seconds": self._to_float(variant.get("target_duration_seconds"))
+                        or self._to_float(reel_draft.get("estimated_total_duration_seconds"))
+                        or 0.0,
+                        "estimated_total_duration_seconds": self._to_float(reel_draft.get("estimated_total_duration_seconds")) or 0.0,
+                        "video_seconds": round(video_seconds, 3),
+                        "image_seconds": round(image_seconds, 3),
+                        "video_ratio": round(video_seconds / max(1.0, video_seconds + image_seconds), 3),
+                        "step_count": len(steps),
+                        "discovered_detail_count": discovered_detail_count,
+                        "has_render": isinstance(rendered, dict),
+                    }
+                )
+
+        return candidates
+
+    def _generate_best_reel_pick_with_ai(self, album: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+        if not self.gemini_client or not types:
+            return None
+
+        candidate_summaries = [
+            self._build_best_pick_candidate_summary(candidate)
+            for candidate in candidates
+        ]
+        parts: list[types.Part] = [
+            types.Part.from_text(
+                text=(
+                    "You are choosing the best travel reel from already-rendered variants. "
+                    "Pick the best existing reel; do not invent a new edit unless a remix is clearly worth a later manual action.\n\n"
+                    "Judging priorities:\n"
+                    "1. Best owner-memory/story version: feels most like the actual trip and contains distinctive moments.\n"
+                    "2. IG-safe version: clean, broadly appealing, easy to understand quickly.\n"
+                    "3. Avoid overvaluing noisy/busy footage if it is repetitive.\n\n"
+                    "Return JSON with keys: winner_source, winner_variant_id, ig_safe_source, ig_safe_variant_id, "
+                    "ranking (array of source, variant_id, score 0-100, reason, strengths, tradeoffs), "
+                    "should_build_remix boolean, remix_reason string.\n\n"
+                    f"Album name: {album.get('name')}\n"
+                    f"Album description: {album.get('description') or 'none'}\n"
+                    f"Standard summary: {self._safe_summary_text(album.get('cached_suggestion'))}\n"
+                    f"Hybrid proxy summary: {self._safe_summary_text(album.get('proxy_cached_suggestion'))}\n"
+                    f"Candidates:\n{json.dumps(candidate_summaries, indent=2, ensure_ascii=True)}"
+                )
+            )
+        ]
+
+        attached_sheets = 0
+        for candidate in candidates[:6]:
+            sheet_payload = self._build_render_contact_sheet_payload(candidate)
+            if sheet_payload is None:
+                continue
+            parts.append(
+                types.Part.from_text(
+                    text=(
+                        f"Contact sheet for {candidate['source']} variant {candidate['variant_id']} "
+                        f"({candidate['label']})."
+                    )
+                )
+            )
+            parts.append(types.Part.from_bytes(data=sheet_payload, mime_type="image/jpeg"))
+            attached_sheets += 1
+
+        if attached_sheets == 0:
+            return None
+
+        try:
+            response = self.gemini_client.models.generate_content(
+                model=self.gemini_model,
+                contents=types.Content(role="user", parts=parts),
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.15,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            return self._normalize_best_pick_payload(
+                album,
+                candidates,
+                self._parse_json(response.text or "{}"),
+                analysis_mode="multimodal_best_pick",
+            )
+        except Exception:
+            return None
+
+    def _build_heuristic_best_reel_pick(self, album: dict[str, Any], candidates: list[dict[str, Any]]) -> dict[str, Any]:
+        scored_candidates = []
+        for candidate in candidates:
+            scored_candidates.append(
+                {
+                    **candidate,
+                    **self._score_best_pick_candidate(candidate),
+                }
+            )
+
+        scored_candidates.sort(key=lambda candidate: (-float(candidate["score"]), -float(candidate["memory_score"]), candidate["source"]))
+        winner = scored_candidates[0]
+        ig_safe_pick = max(scored_candidates, key=lambda candidate: (float(candidate["ig_safe_score"]), float(candidate["score"])))
+        payload = {
+            "winner_source": winner["source"],
+            "winner_variant_id": winner["variant_id"],
+            "ig_safe_source": ig_safe_pick["source"],
+            "ig_safe_variant_id": ig_safe_pick["variant_id"],
+            "ranking": [
+                {
+                    "source": candidate["source"],
+                    "variant_id": candidate["variant_id"],
+                    "score": candidate["score"],
+                    "reason": candidate["reason"],
+                    "strengths": candidate["strengths"],
+                    "tradeoffs": candidate["tradeoffs"],
+                }
+                for candidate in scored_candidates
+            ],
+            "should_build_remix": False,
+            "remix_reason": (
+                "Do not auto-build a best-of remix yet. The current winner is strong enough; keep remixing as a later explicit action."
+            ),
+        }
+        return self._normalize_best_pick_payload(
+            album,
+            candidates,
+            payload,
+            analysis_mode="heuristic_best_pick",
+        )
+
+    def _normalize_best_pick_payload(
+        self,
+        album: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        payload: dict[str, Any],
+        *,
+        analysis_mode: str,
+    ) -> dict[str, Any]:
+        candidate_by_key = {
+            (str(candidate.get("source") or ""), str(candidate.get("variant_id") or "")): candidate
+            for candidate in candidates
+        }
+
+        def find_candidate(source: Any, variant_id: Any) -> dict[str, Any] | None:
+            key = (str(source or "").strip(), str(variant_id or "").strip())
+            return candidate_by_key.get(key)
+
+        scored_fallback = sorted(
+            [{**candidate, **self._score_best_pick_candidate(candidate)} for candidate in candidates],
+            key=lambda candidate: (-float(candidate["score"]), -float(candidate["memory_score"]), candidate["source"]),
+        )
+        winner = find_candidate(payload.get("winner_source"), payload.get("winner_variant_id")) or scored_fallback[0]
+        ig_safe = find_candidate(payload.get("ig_safe_source"), payload.get("ig_safe_variant_id")) or max(
+            scored_fallback,
+            key=lambda candidate: (float(candidate["ig_safe_score"]), float(candidate["score"])),
+        )
+
+        normalized_rankings: list[dict[str, Any]] = []
+        ranking_rows = payload.get("ranking") if isinstance(payload.get("ranking"), list) else []
+        for row in ranking_rows:
+            if not isinstance(row, dict):
+                continue
+            candidate = find_candidate(row.get("source"), row.get("variant_id"))
+            if candidate is None:
+                continue
+            score_payload = self._score_best_pick_candidate(candidate)
+            normalized_rankings.append(
+                {
+                    "rank": len(normalized_rankings) + 1,
+                    "source": candidate["source"],
+                    "variant_id": candidate["variant_id"],
+                    "label": candidate["label"],
+                    "creative_angle": candidate["creative_angle"],
+                    "title": candidate["title"],
+                    "score": round(max(0.0, min(100.0, self._to_float(row.get("score")) or score_payload["score"])), 1),
+                    "reason": str(row.get("reason") or score_payload["reason"]).strip(),
+                    "strengths": self._normalize_text_list(row.get("strengths")) or score_payload["strengths"],
+                    "tradeoffs": self._normalize_text_list(row.get("tradeoffs")) or score_payload["tradeoffs"],
+                    "discovered_detail_count": candidate["discovered_detail_count"],
+                    "video_seconds": candidate["video_seconds"],
+                    "image_seconds": candidate["image_seconds"],
+                    "has_render": candidate["has_render"],
+                }
+            )
+
+        if not normalized_rankings:
+            for candidate in scored_fallback:
+                score_payload = self._score_best_pick_candidate(candidate)
+                normalized_rankings.append(
+                    {
+                        "rank": len(normalized_rankings) + 1,
+                        "source": candidate["source"],
+                        "variant_id": candidate["variant_id"],
+                        "label": candidate["label"],
+                        "creative_angle": candidate["creative_angle"],
+                        "title": candidate["title"],
+                        "score": score_payload["score"],
+                        "reason": score_payload["reason"],
+                        "strengths": score_payload["strengths"],
+                        "tradeoffs": score_payload["tradeoffs"],
+                        "discovered_detail_count": candidate["discovered_detail_count"],
+                        "video_seconds": candidate["video_seconds"],
+                        "image_seconds": candidate["image_seconds"],
+                        "has_render": candidate["has_render"],
+                    }
+                )
+
+        winner_payload = self._build_best_pick_winner_payload(winner, pick_label="Best Story")
+        ig_safe_payload = self._build_best_pick_winner_payload(ig_safe, pick_label="IG Safe Pick")
+        return {
+            "album_id": album.get("id"),
+            "album_name": album.get("name"),
+            "generated_at": datetime.now(UTC).isoformat(),
+            "analysis_mode": analysis_mode,
+            "winner": winner_payload,
+            "ig_safe_pick": ig_safe_payload,
+            "rankings": normalized_rankings[:8],
+            "remix_recommendation": {
+                "should_build": bool(payload.get("should_build_remix")) and False,
+                "reason": str(
+                    payload.get("remix_reason")
+                    or "Keep the best-of remix as an explicit future action after the pick layer proves useful."
+                ).strip(),
+            },
+        }
+
+    @staticmethod
+    def _build_best_pick_candidate_summary(candidate: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "source": candidate["source"],
+            "variant_id": candidate["variant_id"],
+            "label": candidate["label"],
+            "creative_angle": candidate["creative_angle"],
+            "title": candidate["title"],
+            "target_duration_seconds": candidate["target_duration_seconds"],
+            "video_seconds": candidate["video_seconds"],
+            "image_seconds": candidate["image_seconds"],
+            "discovered_detail_count": candidate["discovered_detail_count"],
+            "has_render": candidate["has_render"],
+        }
+
+    def _build_best_pick_winner_payload(self, candidate: dict[str, Any], *, pick_label: str) -> dict[str, Any]:
+        score_payload = self._score_best_pick_candidate(candidate)
+        return {
+            "pick_label": pick_label,
+            "source": candidate["source"],
+            "variant_id": candidate["variant_id"],
+            "label": candidate["label"],
+            "creative_angle": candidate["creative_angle"],
+            "title": candidate["title"],
+            "score": score_payload["score"],
+            "reason": score_payload["reason"],
+            "reel_draft": candidate["reel_draft"],
+            "rendered_variant": candidate.get("rendered_variant"),
+            "discovered_detail_count": candidate["discovered_detail_count"],
+            "video_seconds": candidate["video_seconds"],
+            "image_seconds": candidate["image_seconds"],
+            "has_render": candidate["has_render"],
+        }
+
+    @staticmethod
+    def _score_best_pick_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+        source = str(candidate.get("source") or "")
+        label = str(candidate.get("label") or "").lower()
+        creative_angle = str(candidate.get("creative_angle") or "").lower()
+        discovered_detail_count = int(candidate.get("discovered_detail_count") or 0)
+        video_ratio = float(candidate.get("video_ratio") or 0.0)
+        image_seconds = float(candidate.get("image_seconds") or 0.0)
+        has_render = bool(candidate.get("has_render"))
+
+        memory_score = 52.0 + (video_ratio * 18.0)
+        ig_safe_score = 54.0 + (video_ratio * 8.0)
+        strengths: list[str] = []
+        tradeoffs: list[str] = []
+
+        if "balanced" in label or "balanced" in creative_angle:
+            memory_score += 7.0
+            ig_safe_score += 7.0
+            strengths.append("balanced pacing")
+        if "scenic" in label or "scenic" in creative_angle:
+            memory_score += 4.0
+            ig_safe_score += 8.0
+            strengths.append("scenic/public-post friendly")
+        if "motion" in label or "motion" in creative_angle:
+            memory_score += 3.0
+            ig_safe_score += 1.5
+            strengths.append("motion-forward")
+        if source == "proxy" and discovered_detail_count > 0:
+            memory_score += min(18.0, discovered_detail_count * 8.5)
+            ig_safe_score += min(5.0, discovered_detail_count * 2.0)
+            strengths.append("distinct discovered detail beats")
+        elif source == "proxy":
+            memory_score += 2.0
+            tradeoffs.append("hybrid source without clear discovered-detail advantage")
+        if source == "standard":
+            ig_safe_score += 4.0
+            strengths.append("clean standard story baseline")
+        if image_seconds > 10.0:
+            ig_safe_score -= 2.0
+            tradeoffs.append("uses more still-image time")
+        if not has_render:
+            memory_score -= 6.0
+            ig_safe_score -= 6.0
+            tradeoffs.append("not rendered yet, so confidence is lower")
+
+        memory_score = max(0.0, min(100.0, memory_score))
+        ig_safe_score = max(0.0, min(100.0, ig_safe_score))
+        score = round((memory_score * 0.67) + (ig_safe_score * 0.33), 1)
+        source_label = "proxy hybrid" if source == "proxy" else "standard"
+        reason = (
+            f"{source_label} {candidate.get('label')} scores well because it has "
+            f"{round(float(candidate.get('video_seconds') or 0.0), 1)}s of video, "
+            f"{discovered_detail_count} discovered detail beat(s), and {', '.join(strengths[:2]) or 'a coherent reel structure'}."
+        )
+        if source == "proxy" and discovered_detail_count > 0:
+            reason += " This is strongest for owner-memory/story review."
+        if source == "standard":
+            reason += " This remains safer for broad IG-style posting."
+
+        return {
+            "score": score,
+            "memory_score": round(memory_score, 1),
+            "ig_safe_score": round(ig_safe_score, 1),
+            "reason": reason,
+            "strengths": strengths[:4] or ["coherent reel structure"],
+            "tradeoffs": tradeoffs[:4] or ["no major tradeoff detected"],
+        }
+
+    def _build_render_contact_sheet_payload(self, candidate: dict[str, Any]) -> bytes | None:
+        rendered_relative_path = str(candidate.get("rendered_relative_path") or "").strip()
+        if not rendered_relative_path:
+            return None
+        render_path = (self.storage_root / rendered_relative_path).resolve()
+        if not render_path.exists() or self.storage_root not in render_path.parents:
+            return None
+
+        ffmpeg_binary = shutil.which("ffmpeg")
+        if not ffmpeg_binary:
+            return None
+
+        safe_name = re.sub(r"[^a-z0-9-]+", "-", f"{candidate.get('source')}-{candidate.get('variant_id')}".lower()).strip("-")
+        sheet_path = Path("/tmp") / f"travel-best-pick-{safe_name or 'variant'}.jpg"
+        if sheet_path.exists():
+            sheet_path.unlink(missing_ok=True)
+        command = [
+            ffmpeg_binary,
+            "-y",
+            "-i",
+            str(render_path),
+            "-vf",
+            "fps=1/7,scale=220:-1,tile=3x3",
+            "-frames:v",
+            "1",
+            "-update",
+            "1",
+            str(sheet_path),
+        ]
+        try:
+            result = subprocess.run(command, capture_output=True, check=False, timeout=90)
+            if result.returncode != 0:
+                return None
+            if not sheet_path.exists() or sheet_path.stat().st_size <= 0 or sheet_path.stat().st_size > 8_000_000:
+                return None
+            return sheet_path.read_bytes()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _safe_summary_text(suggestion: Any) -> str:
+        if not isinstance(suggestion, dict):
+            return "none"
+        return str(suggestion.get("album_summary") or suggestion.get("visual_trip_story") or "none")[:1200]
+
+    @staticmethod
+    def _normalize_text_list(value: Any) -> list[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()][:4]
+        if isinstance(value, str) and value.strip():
+            return [value.strip()]
+        return []
 
     def _build_multimodal_parts(self, album: dict[str, Any], *, analysis_profile: str = "standard") -> list[types.Part]:
         parts: list[types.Part] = [

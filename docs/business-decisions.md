@@ -147,6 +147,8 @@ Current implementation note:
 - `petar1` after the keyframe-first change supports the current product thesis: standard remains the default taste/story read, while proxy/keyframe work is most valuable as a scout that injects discovered details into selected beats
 - heavy classification should use a combined threshold, not duration alone: `>10m`, `>500 MB`, 4K, high bitrate, or expensive/incompatible codecs should move media out of the normal short interactive path
 - likely monetization surface is heavy indexing plus extra variants/exports, detail-discovery packs, 4K/high-bitrate processing, credits, and optional original archive retention; durable storage of heavy originals should be opt-in
+- local cleanup is part of the heavy-video product safety story: generated render folders can be cleared independently from uploaded originals, and album deletion must remove rendered variants as well as final reels
+- `AI Best Pick` should be a pick layer before it becomes a remix layer: compare existing rendered standard/proxy variants, name the best story pick and IG-safe pick, and only recommend a best-of remix later if the winner still has obvious gaps
 
 ## Telemetry Before Final Pricing
 

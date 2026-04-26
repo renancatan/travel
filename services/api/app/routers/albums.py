@@ -30,6 +30,7 @@ from services.api.app.models.albums import (
     GenerateAlbumDescriptionResponse,
     GenerateMapEntryRequest,
     UpdateMapEntryRequest,
+    RenderCacheCleanupResponse,
     RenderReelResponse,
     SaveReelDraftVersionRequest,
     StartMediaProcessingJobRequest,
@@ -69,6 +70,11 @@ def create_album(request: CreateAlbumRequest) -> dict:
             },
         )
     return repository.create_album(name=request.name, description=request.description)
+
+
+@router.delete("/render-cache", response_model=RenderCacheCleanupResponse)
+def clear_render_cache() -> dict:
+    return repository.clear_local_render_cache()
 
 
 @router.delete("/{album_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -536,6 +542,23 @@ def generate_album_proxy_suggestions(
     )
     repository.save_cached_suggestion(album_id, suggestion, suggestion_key=PROXY_SUGGESTION_KEY)
     return suggestion
+
+
+@router.post("/{album_id}/best-pick", response_model=AlbumResponse)
+def generate_album_best_reel_pick(album_id: str) -> dict:
+    album = repository.get_album(album_id)
+    if album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+
+    try:
+        best_pick = suggestion_service.generate_best_reel_pick(album)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    updated_album = repository.save_best_reel_pick(album_id, best_pick)
+    if updated_album is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Album not found.")
+    return updated_album
 
 
 @router.post("/{album_id}/reel-draft", response_model=AlbumResponse)

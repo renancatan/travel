@@ -49,6 +49,7 @@ class FileRepository:
             "description_meta": None,
             "cached_suggestion": None,
             "proxy_cached_suggestion": None,
+            "best_reel_pick": None,
             "map_entry": None,
             "rendered_reel": None,
             "created_at": _utc_now(),
@@ -130,6 +131,7 @@ class FileRepository:
         if invalidate_rendered_reel:
             self._clear_rendered_reel_files(album)
         album[normalized_suggestion_key] = cached_suggestion
+        album["best_reel_pick"] = None
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
@@ -195,6 +197,7 @@ class FileRepository:
         else:
             cached_suggestion.pop("rendered_variant_renders", None)
         album[normalized_suggestion_key] = cached_suggestion
+        album["best_reel_pick"] = None
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
@@ -219,6 +222,16 @@ class FileRepository:
         if should_clear_existing_files:
             self._clear_rendered_reel_files(album)
         album["rendered_reel"] = rendered_reel
+        album["updated_at"] = _utc_now()
+        self._write_album_file(album)
+        return album
+
+    def save_best_reel_pick(self, album_id: str, best_reel_pick: dict[str, Any] | None) -> dict[str, Any] | None:
+        album = self.get_album(album_id)
+        if album is None:
+            return None
+
+        album["best_reel_pick"] = best_reel_pick
         album["updated_at"] = _utc_now()
         self._write_album_file(album)
         return album
@@ -448,9 +461,50 @@ class FileRepository:
             return False
 
         if album is not None:
+            self._clear_rendered_variant_files(album)
+            self._clear_rendered_variant_files(album, suggestion_key="proxy_cached_suggestion")
             self._clear_rendered_reel_files(album)
         shutil.rmtree(album_dir)
         return True
+
+    def clear_local_render_cache(self) -> dict[str, Any]:
+        renders_root = self.storage_root / "renders"
+        render_children = list(renders_root.iterdir()) if renders_root.exists() else []
+        deleted_usage = {"bytes": 0, "files": 0, "directories": 0}
+        for child in render_children:
+            child_usage = self._measure_path_usage(child)
+            deleted_usage["bytes"] += child_usage["bytes"]
+            deleted_usage["files"] += child_usage["files"]
+            deleted_usage["directories"] += child_usage["directories"]
+
+        album_records_updated = 0
+        for album in self.list_albums():
+            before = json.dumps(album, sort_keys=True)
+            self._clear_rendered_variant_files(album)
+            self._clear_rendered_variant_files(album, suggestion_key="proxy_cached_suggestion")
+            self._clear_rendered_reel_files(album)
+            album["best_reel_pick"] = None
+            after = json.dumps(album, sort_keys=True)
+            if after != before:
+                album["updated_at"] = _utc_now()
+                self._write_album_file(album)
+                album_records_updated += 1
+
+        for child in render_children:
+            if not child.exists():
+                continue
+            if child.is_dir():
+                shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+
+        renders_root.mkdir(parents=True, exist_ok=True)
+        return {
+            "deleted_render_directories": deleted_usage["directories"],
+            "deleted_render_files": deleted_usage["files"],
+            "deleted_bytes": deleted_usage["bytes"],
+            "album_records_updated": album_records_updated,
+        }
 
     def _album_dir(self, album_id: str) -> Path:
         return self.albums_root / album_id
@@ -489,6 +543,29 @@ class FileRepository:
                 target_path.unlink()
 
     @staticmethod
+    def _measure_path_usage(path: Path) -> dict[str, int]:
+        if not path.exists():
+            return {"bytes": 0, "files": 0, "directories": 0}
+        if path.is_file():
+            return {"bytes": path.stat().st_size, "files": 1, "directories": 0}
+
+        total_bytes = 0
+        file_count = 0
+        directory_count = 1
+        for child in path.rglob("*"):
+            if child.is_dir():
+                directory_count += 1
+                continue
+            if child.is_file():
+                total_bytes += child.stat().st_size
+                file_count += 1
+        return {
+            "bytes": total_bytes,
+            "files": file_count,
+            "directories": directory_count,
+        }
+
+    @staticmethod
     def _extension_for_content_type(content_type: str) -> str:
         extension = mimetypes.guess_extension(content_type, strict=False)
         if extension == ".jpe":
@@ -512,6 +589,7 @@ class FileRepository:
             "description_meta": album.get("description_meta"),
             "cached_suggestion": album.get("cached_suggestion"),
             "proxy_cached_suggestion": album.get("proxy_cached_suggestion"),
+            "best_reel_pick": album.get("best_reel_pick"),
             "map_entry": self._normalize_map_entry(album.get("map_entry")),
             "rendered_reel": album.get("rendered_reel"),
             "created_at": album.get("created_at", _utc_now()),
@@ -734,6 +812,7 @@ class FileRepository:
         album["cached_suggestion"] = None
         self._clear_rendered_variant_files(album, suggestion_key="proxy_cached_suggestion")
         album["proxy_cached_suggestion"] = None
+        album["best_reel_pick"] = None
         self._clear_rendered_reel_files(album)
         if clear_description_meta:
             album["description_meta"] = None
